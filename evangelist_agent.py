@@ -14,6 +14,8 @@ Usage:
     python3 evangelist_agent.py --dry-run    # Preview without posting
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -22,6 +24,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 
@@ -51,24 +54,33 @@ client = httpx.Client(timeout=30, verify=False)
 
 # ── Discovery ─────────────────────────────────────────────────
 
-def discover_agents_from_beacon():
+def discover_agents_from_beacon() -> list[dict[str, Any]]:
     """Pull agent list from Beacon Atlas."""
     try:
         r = client.get(f"{BEACON_URL}/atlas/agents", params={"limit": 50})
         if r.status_code == 200:
-            return r.json().get("agents", [])
+            data: Any = r.json()
+            agents = data.get("agents", []) if isinstance(data, dict) else []
+            return list(agents) if isinstance(agents, list) else []
     except Exception as e:
         log.warning(f"Beacon Atlas unavailable: {e}")
     return []
 
 
-def discover_agents_from_bottube():
+def discover_agents_from_bottube() -> list[str]:
     """Pull active agents from BoTTube stats."""
     try:
         r = client.get(f"{BOTTUBE_URL}/api/stats")
         if r.status_code == 200:
-            data = r.json()
-            return [a["agent_name"] for a in data.get("top_agents", [])]
+            data: Any = r.json()
+            top_agents = data.get("top_agents", []) if isinstance(data, dict) else []
+            if not isinstance(top_agents, list):
+                return []
+            out: list[str] = []
+            for a in top_agents:
+                if isinstance(a, dict) and isinstance(a.get("agent_name"), str):
+                    out.append(a["agent_name"])
+            return out
     except Exception as e:
         log.warning(f"BoTTube unavailable: {e}")
     return []
@@ -94,7 +106,7 @@ def discover_agents_from_a2a():
 
 # ── Content Generation ─────────────────────────────────────────
 
-def generate_onboarding_post():
+def generate_onboarding_post() -> dict[str, str]:
     """Generate a Moltbook post about earning RTC."""
     # Fetch live stats for authenticity
     try:
@@ -104,7 +116,7 @@ def generate_onboarding_post():
         health = {"version": "2.2.1-rip200", "ok": True}
         stats = {"agents": 130, "videos": 850, "total_views": 57000}
 
-    templates = [
+    templates: list[dict[str, str]] = [
         {
             "title": f"RustChain MCP Server — {stats.get('agents', 130)}+ agents already connected",
             "submolt": "rustchain",
@@ -147,7 +159,7 @@ def generate_onboarding_post():
 
 # ── Beacon Ping ────────────────────────────────────────────────
 
-def beacon_ping_agent(agent_id: str, message: str, dry_run: bool = False):
+def beacon_ping_agent(agent_id: str, message: str, dry_run: bool = False) -> bool:
     """Send a Beacon ping to another agent with onboarding offer."""
     ping_payload = {
         "from": AGENT_WALLET,
@@ -186,7 +198,7 @@ def beacon_ping_agent(agent_id: str, message: str, dry_run: bool = False):
 
 # ── Moltbook Post ──────────────────────────────────────────────
 
-def post_to_moltbook(title: str, content: str, submolt: str, dry_run: bool = False):
+def post_to_moltbook(title: str, content: str, submolt: str, dry_run: bool = False) -> bool:
     """Post onboarding content to Moltbook."""
     if not MOLTBOOK_KEY:
         log.info("No MOLTBOOK_API_KEY set, skipping Moltbook post")
