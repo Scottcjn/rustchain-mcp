@@ -9,28 +9,43 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          pip install ruff
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
-      - name: Lint with ruff
-        run: ruff check . --output-format=github
+          python -m pip install --upgrade pip
+          pip install flake8 black isort
+          pip install -e .
+      - name: Check formatting with black
+        run: black --check .
+      - name: Check import order with isort
+        run: isort --check-only .
+      - name: Lint with flake8
+        run: flake8 rustchain_mcp/ tests/ --max-line-length=120 --ignore=E501,W503
 
   test:
     runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          pip install pytest
-          pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+          pip install -e .
       - name: Run tests
-        run: pytest tests/ -v --tb=short 2>/dev/null || echo "No tests found or tests skipped"
+        run: pytest tests/ -v
