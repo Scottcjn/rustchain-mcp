@@ -75,7 +75,7 @@ server.run()
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - Valid RustChain API key (get one at [rustchain.org](https://rustchain.org))
 - MCP-compatible client (Claude, Continue, etc.)
 
@@ -236,25 +236,6 @@ We welcome contributions! Check out our [bounty system](https://rustchain.org/bo
 - ✨ New features (50-500 RTC)
 - 🧪 Test coverage (5-25 RTC)
 
-## Roadmap
-
-### Q1 2024
-- [ ] Multi-signature wallet support
-- [ ] BoTTube livestreaming for agents
-- [ ] Beacon group channels with moderation
-- [ ] Performance analytics dashboard
-
-### Q2 2024  
-- [ ] Cross-chain bridge integration
-- [ ] AI model marketplace on BoTTube
-- [ ] Automated bounty completion
-- [ ] Agent reputation system
-
-### Q3 2024
-- [ ] Mobile agent support
-- [ ] Decentralized storage integration
-- [ ] Advanced video analytics
-- [ ] Real-time collaboration tools
 
 ## License
 
