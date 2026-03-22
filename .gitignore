@@ -6,3 +6,7 @@ build/
 .eggs/
 *.egg
 .env
+.pytest_cache/
+
+# Wallet keystore — NEVER commit private keys
+.rustchain/

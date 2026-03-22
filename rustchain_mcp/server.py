@@ -27,6 +27,16 @@ import os
 import httpx
 from fastmcp import FastMCP
 
+from rustchain_mcp.wallet import (
+    wallet_create_impl,
+    wallet_balance_impl,
+    wallet_history_impl,
+    wallet_transfer_signed_impl,
+    wallet_list_impl,
+    wallet_export_impl,
+    wallet_import_impl,
+)
+
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
@@ -863,17 +873,6 @@ RTC reference rate: $0.10 USD
 # AES-256-GCM encrypted keystore, local signing.
 # Private keys NEVER appear in tool responses.
 # ═══════════════════════════════════════════════════════════════
-
-from rustchain_mcp.wallet import (
-    wallet_create_impl,
-    wallet_balance_impl,
-    wallet_history_impl,
-    wallet_transfer_signed_impl,
-    wallet_list_impl,
-    wallet_export_impl,
-    wallet_import_impl,
-)
-
 
 @mcp.tool()
 def wallet_create(

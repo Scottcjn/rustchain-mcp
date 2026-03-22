@@ -30,8 +30,6 @@ import secrets
 import time
 import uuid
 from pathlib import Path
-from typing import Any
-
 # ── Keystore path ──────────────────────────────────────────────
 WALLET_DIR = Path(
     os.environ.get("RUSTCHAIN_WALLET_DIR", os.path.expanduser("~/.rustchain/mcp_wallets"))
@@ -96,8 +94,6 @@ def _generate_mnemonic(word_count: int = 12) -> str:
 
 def _seed_from_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     """Derive a 64-byte seed from mnemonic using PBKDF2-HMAC-SHA512."""
-    import hmac as _hmac
-
     mnemonic_bytes = mnemonic.encode("utf-8")
     salt = ("mnemonic" + passphrase).encode("utf-8")
 
