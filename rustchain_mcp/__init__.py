@@ -1,3 +1,3 @@
 """RustChain + BoTTube MCP Server — AI agent tools for the RustChain blockchain and BoTTube video platform."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

@@ -857,6 +857,165 @@ RTC reference rate: $0.10 USD
 """
 
 
+# ═══════════════════════════════════════════════════════════════
+# WALLET MANAGEMENT TOOLS (v0.4)
+# Secure Ed25519 wallet operations with BIP39 seed phrases,
+# AES-256-GCM encrypted keystore, local signing.
+# Private keys NEVER appear in tool responses.
+# ═══════════════════════════════════════════════════════════════
+
+from rustchain_mcp.wallet import (
+    wallet_create_impl,
+    wallet_balance_impl,
+    wallet_history_impl,
+    wallet_transfer_signed_impl,
+    wallet_list_impl,
+    wallet_export_impl,
+    wallet_import_impl,
+)
+
+
+@mcp.tool()
+def wallet_create(
+    label: str = "default",
+    passphrase: str = "rustchain",
+) -> dict:
+    """Create a new Ed25519 wallet with BIP39 seed phrase.
+
+    Generates a cryptographically secure wallet with a 12-word mnemonic
+    seed phrase for backup/recovery. The private key is encrypted with
+    AES-256-GCM and stored at ~/.rustchain/mcp_wallets/.
+
+    Args:
+        label: Human-readable name for the wallet (e.g. "trading", "bounties")
+        passphrase: Encryption passphrase for the keystore file.
+                    Choose a strong passphrase to protect your private key.
+
+    Returns wallet address, public key, and mnemonic (shown ONCE).
+    SAVE THE MNEMONIC — it's the only way to recover the wallet.
+    Private keys are NEVER returned in responses.
+    """
+    return wallet_create_impl(label=label, passphrase=passphrase)
+
+
+@mcp.tool()
+def wallet_balance(wallet_id: str) -> dict:
+    """Check RTC token balance for a wallet.
+
+    Args:
+        wallet_id: Wallet ID (e.g. "rtc_abc123def456") or RTC address.
+                   If a local wallet ID is provided, the address is
+                   resolved from the keystore automatically.
+
+    Returns current RTC balance from the RustChain node.
+    """
+    return wallet_balance_impl(wallet_id=wallet_id)
+
+
+@mcp.tool()
+def wallet_history(wallet_id: str, limit: int = 20) -> dict:
+    """Get transaction history for a wallet.
+
+    Args:
+        wallet_id: Wallet ID or RTC address.
+        limit: Maximum transactions to return (default: 20, max: 100).
+
+    Returns recent sends and receives for the wallet.
+    """
+    return wallet_history_impl(wallet_id=wallet_id, limit=min(limit, 100))
+
+
+@mcp.tool()
+def wallet_transfer_signed(
+    wallet_id: str,
+    to_address: str,
+    amount_rtc: float,
+    passphrase: str = "rustchain",
+    memo: str = "",
+) -> dict:
+    """Sign and submit an RTC transfer from a local wallet.
+
+    The transaction is signed locally using the wallet's Ed25519
+    private key — the key NEVER leaves the local machine. The signed
+    transaction is then submitted to the RustChain node.
+
+    Args:
+        wallet_id: Source wallet ID (must exist in local keystore).
+        to_address: Destination RTC address (e.g. "RTC_a1b2c3...")
+        amount_rtc: Amount of RTC to send (must be positive).
+        passphrase: Keystore passphrase to decrypt the signing key.
+        memo: Optional transaction memo/note.
+
+    Returns transaction ID and confirmation on success.
+    """
+    return wallet_transfer_signed_impl(
+        wallet_id=wallet_id,
+        to_address=to_address,
+        amount_rtc=amount_rtc,
+        passphrase=passphrase,
+        memo=memo,
+    )
+
+
+@mcp.tool()
+def wallet_list() -> dict:
+    """List all wallets in the local MCP keystore.
+
+    Returns metadata for every wallet file in ~/.rustchain/mcp_wallets/
+    including wallet ID, address, label, and creation date.
+
+    No decryption is performed — private keys are NOT exposed.
+    """
+    return wallet_list_impl()
+
+
+@mcp.tool()
+def wallet_export(
+    wallet_id: str,
+    passphrase: str = "rustchain",
+) -> dict:
+    """Export an encrypted keystore JSON for backup or transfer.
+
+    The exported JSON contains the AES-256-GCM encrypted private key.
+    It can be imported on another machine using wallet_import with
+    the same passphrase.
+
+    Args:
+        wallet_id: Wallet ID to export.
+        passphrase: Keystore passphrase (verifies you own the wallet).
+
+    Returns encrypted keystore JSON. Private keys are NOT in plaintext.
+    """
+    return wallet_export_impl(wallet_id=wallet_id, passphrase=passphrase)
+
+
+@mcp.tool()
+def wallet_import(
+    passphrase: str = "rustchain",
+    mnemonic: str = "",
+    keystore_json: str = "",
+    label: str = "imported",
+) -> dict:
+    """Import a wallet from BIP39 seed phrase or encrypted keystore JSON.
+
+    Provide EITHER mnemonic OR keystore_json — not both.
+
+    Args:
+        passphrase: Passphrase for keystore encryption/decryption.
+        mnemonic: BIP39 12-word seed phrase to recover wallet.
+        keystore_json: Encrypted keystore JSON string (from wallet_export).
+        label: Human-readable label for the imported wallet.
+
+    Returns wallet info on success. Private keys are NOT in the response.
+    """
+    return wallet_import_impl(
+        passphrase=passphrase,
+        mnemonic=mnemonic,
+        keystore_json=keystore_json,
+        label=label,
+    )
+
+
 # ── Entry Point ────────────────────────────────────────────────
 if __name__ == "__main__":
     mcp.run()
