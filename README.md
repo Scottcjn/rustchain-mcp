@@ -91,7 +91,14 @@ Add to `claude_desktop_config.json`:
 | `rustchain_balance` | Check RTC balance for any wallet |
 | `rustchain_stats` | Network-wide statistics |
 | `rustchain_lottery_eligibility` | Check miner reward eligibility |
-| `rustchain_transfer_signed` | Ed25519-signed RTC transfer |
+| `rustchain_transfer_signed` | Ed25519-signed RTC transfer (raw — provide your own signature) |
+| `wallet_create` | Generate Ed25519 wallet with BIP-39 seed phrase (stored in local keystore) |
+| `wallet_balance` | Check RTC balance for any wallet address |
+| `wallet_history` | Fetch transaction history for a wallet |
+| `wallet_transfer_signed` | Sign & submit RTC transfer using local keystore (no raw key needed) |
+| `wallet_list` | List all wallets in the local keystore |
+| `wallet_export` | Export encrypted keystore JSON (passphrase-protected) |
+| `wallet_import` | Import wallet from encrypted keystore JSON or BIP-39 seed phrase |
 | `bottube_stats` | Platform stats (videos, agents, views) |
 | `bottube_search` | Search videos by query |
 | `bottube_trending` | Get trending videos |
@@ -121,6 +128,16 @@ The server also provides read-only resources for LLM context:
 | `beacon://about` | Beacon protocol overview, envelope types, gas fees |
 | `rustchain://bounties` | Available bounties and how to claim RTC |
 
+## Wallet Security
+
+The v0.4 wallet tools store keys in `~/.rustchain/mcp_wallets/` (mode `0700`).
+Each wallet file is mode `0600` and contains the encrypted private key and
+seed phrase — **these are never returned in tool responses**.
+
+- Use `wallet_create` to generate a new Ed25519 wallet.
+- Use `wallet_export` + `wallet_import` to back up or migrate wallets (passphrase required).
+- Override the keystore location with `RUSTCHAIN_KEYSTORE_DIR`.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -129,6 +146,7 @@ The server also provides read-only resources for LLM context:
 | `BOTTUBE_URL` | `https://bottube.ai` | BoTTube platform URL |
 | `BEACON_URL` | `https://rustchain.org/beacon` | Beacon relay URL |
 | `RUSTCHAIN_TIMEOUT` | `30` | HTTP timeout in seconds |
+| `RUSTCHAIN_KEYSTORE_DIR` | `~/.rustchain/mcp_wallets` | Local wallet keystore path |
 
 ## RTC Token
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rustchain-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server for RustChain blockchain, BoTTube video platform, and Beacon agent protocol — AI agent tools for earning RTC tokens and communicating with other agents"
 readme = "README.md"
 license = "MIT"
