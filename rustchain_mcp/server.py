@@ -23,9 +23,19 @@ License: MIT
 """
 
 import os
+import json
+from typing import Optional
 
 import httpx
 from fastmcp import FastMCP
+
+# Import wallet crypto module
+from .rustchain_crypto import (
+    get_wallet_manager,
+    WalletManager,
+    CRYPTO_AVAILABLE,
+    BIP39_AVAILABLE,
+)
 
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
@@ -704,6 +714,517 @@ def beacon_network_stats() -> dict:
         stats["health"] = {"ok": "unknown"}
 
     return stats
+
+
+# ═══════════════════════════════════════════════════════════════
+# WALLET MANAGEMENT TOOLS
+# Secure Ed25519 wallet creation, import, export, and signing
+# Private keys and seed phrases are NEVER exposed in responses
+# ═══════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def wallet_create(
+    name: str,
+    password: str,
+    store_mnemonic: bool = True,
+    mnemonic_words: int = 12,
+) -> dict:
+    """Create a new Ed25519 wallet with BIP39 seed phrase.
+
+    Generates a new wallet with:
+    - Ed25519 key pair for signing
+    - BIP39 mnemonic (12 or 24 words) for backup
+    - Encrypted keystore storage
+
+    IMPORTANT: The mnemonic/seed phrase is NOT returned for security.
+    To backup the mnemonic, use wallet_export_mnemonic separately.
+
+    Args:
+        name: Wallet name (e.g., "my-agent-wallet")
+        password: Strong password for encrypting the keystore (min 8 chars)
+        store_mnemonic: Whether to generate and store a BIP39 mnemonic (default: True)
+        mnemonic_words: Number of mnemonic words - 12 or 24 (default: 12)
+
+    Returns:
+        Wallet info with wallet_id, address, and public_key (never private key or mnemonic)
+
+    Example:
+        wallet = wallet_create("my-wallet", "secure-password-123")
+        print(f"Wallet ID: {wallet['wallet_id']}")
+        print(f"Address: {wallet['address']}")
+    """
+    if not CRYPTO_AVAILABLE:
+        raise RuntimeError(
+            "Cryptography libraries not installed. "
+            "Run: pip install cryptography"
+        )
+
+    if store_mnemonic and not BIP39_AVAILABLE:
+        raise RuntimeError(
+            "BIP39 mnemonic library not installed. "
+            "Run: pip install mnemonic"
+        )
+
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters")
+
+    if mnemonic_words not in (12, 24):
+        raise ValueError("mnemonic_words must be 12 or 24")
+
+    # Convert word count to bit strength
+    strength = 128 if mnemonic_words == 12 else 256
+
+    manager = get_wallet_manager()
+    wallet_info = manager.create_wallet(
+        name=name,
+        password=password,
+        store_mnemonic=store_mnemonic,
+        mnemonic_strength=strength
+    )
+
+    return {
+        "wallet_id": wallet_info.wallet_id,
+        "address": wallet_info.address,
+        "public_key": wallet_info.public_key_hex,
+        "name": wallet_info.name,
+        "created_at": wallet_info.created_at,
+        "has_mnemonic": store_mnemonic,
+        "security_note": (
+            "Your wallet has been created and encrypted. "
+            "The mnemonic/seed phrase is stored encrypted but NOT shown here for security. "
+            "Use wallet_export_mnemonic to backup your seed phrase."
+        )
+    }
+
+
+@mcp.tool()
+def wallet_balance(wallet_id: str) -> dict:
+    """Check RTC balance for a wallet by wallet_id or address.
+
+    This is a convenience wrapper that works with either:
+    - Local wallet_id (e.g., "wallet_abc123...")
+    - RTC address (e.g., "RTCabc123...")
+
+    Args:
+        wallet_id: Wallet ID or RTC address to check balance
+
+    Returns:
+        Balance info with RTC amount and wallet details
+
+    Example:
+        balance = wallet_balance("wallet_abc123...")
+        print(f"Balance: {balance['balance']} RTC")
+    """
+    # Check if it's a wallet_id or address
+    if wallet_id.startswith("wallet_"):
+        # It's a local wallet ID - get the address
+        manager = get_wallet_manager()
+        wallets = manager.list_wallets()
+        for w in wallets:
+            if w.wallet_id == wallet_id:
+                wallet_id = w.address
+                break
+
+    # Use existing rustchain_balance tool logic
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
+    r.raise_for_status()
+    return r.json()
+
+
+@mcp.tool()
+def wallet_history(
+    wallet_id: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    """Get transaction history for a wallet.
+
+    Args:
+        wallet_id: Wallet ID or RTC address
+        limit: Maximum number of transactions to return (default: 20, max: 100)
+        offset: Pagination offset (default: 0)
+
+    Returns:
+        Transaction history with sends, receives, and timestamps
+
+    Example:
+        history = wallet_history("wallet_abc123...", limit=10)
+        for tx in history['transactions']:
+            print(f"{tx['type']}: {tx['amount']} RTC")
+    """
+    # Resolve wallet_id to address if needed
+    address = wallet_id
+    if wallet_id.startswith("wallet_"):
+        manager = get_wallet_manager()
+        wallets = manager.list_wallets()
+        for w in wallets:
+            if w.wallet_id == wallet_id:
+                address = w.address
+                break
+
+    # Query transaction history from node
+    try:
+        r = get_client().get(
+            f"{RUSTCHAIN_NODE}/wallet/history",
+            params={
+                "address": address,
+                "limit": min(limit, 100),
+                "offset": offset
+            }
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        # Sanitize - never expose private keys
+        transactions = data.get("transactions", [])
+        for tx in transactions:
+            tx.pop("private_key", None)
+            tx.pop("signature_private", None)
+
+        return {
+            "address": address,
+            "transactions": transactions,
+            "total": data.get("total", len(transactions)),
+            "limit": limit,
+            "offset": offset
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return {
+                "address": address,
+                "transactions": [],
+                "total": 0,
+                "message": "No transaction history found for this address"
+            }
+        raise
+
+
+@mcp.tool()
+def wallet_transfer_signed(
+    wallet_id: str,
+    password: str,
+    to_address: str,
+    amount_rtc: float,
+    memo: str = "",
+) -> dict:
+    """Sign and submit an RTC transfer from a local wallet.
+
+    This tool:
+    1. Decrypts the wallet's private key (in memory only)
+    2. Signs the transfer transaction
+    3. Submits to the RustChain network
+    4. Returns transaction result
+
+    SECURITY: Private keys are never exposed in the response.
+
+    Args:
+        wallet_id: Source wallet ID (e.g., "wallet_abc123...")
+        password: Password to decrypt the wallet's private key
+        to_address: Destination RTC address
+        amount_rtc: Amount to transfer in RTC
+        memo: Optional transaction memo/note
+
+    Returns:
+        Transaction result with tx_id, from, to, amount, and new balance
+
+    Example:
+        result = wallet_transfer_signed(
+            wallet_id="wallet_abc123...",
+            password="my-password",
+            to_address="RTCxyz789...",
+            amount_rtc=10.5,
+            memo="Payment for services"
+        )
+        print(f"Transaction ID: {result['tx_id']}")
+    """
+    if not CRYPTO_AVAILABLE:
+        raise RuntimeError("Cryptography libraries not installed")
+
+    if amount_rtc <= 0:
+        raise ValueError("Amount must be positive")
+
+    # Sign the transaction locally
+    manager = get_wallet_manager()
+    signed_tx = manager.sign_transaction(
+        wallet_id=wallet_id,
+        password=password,
+        to_address=to_address,
+        amount_rtc=amount_rtc,
+        memo=memo
+    )
+
+    # Submit to RustChain node
+    r = get_client().post(
+        f"{RUSTCHAIN_NODE}/wallet/transfer/signed",
+        json=signed_tx
+    )
+    r.raise_for_status()
+    result = r.json()
+
+    # Sanitize response
+    result.pop("private_key", None)
+    result.pop("signature_private", None)
+
+    return result
+
+
+@mcp.tool()
+def wallet_list() -> dict:
+    """List all wallets stored in the local keystore.
+
+    Returns public info for each wallet:
+    - wallet_id (used for operations)
+    - address (RTC address)
+    - public_key
+    - name
+    - created_at
+
+    NOTE: Private keys and seed phrases are NEVER included.
+
+    Returns:
+        List of wallets in the keystore
+
+    Example:
+        wallets = wallet_list()
+        for w in wallets['wallets']:
+            print(f"{w['name']}: {w['address']}")
+    """
+    manager = get_wallet_manager()
+    wallets = manager.list_wallets()
+
+    return {
+        "total": len(wallets),
+        "wallets": [
+            {
+                "wallet_id": w.wallet_id,
+                "address": w.address,
+                "public_key": w.public_key_hex,
+                "name": w.name,
+                "created_at": w.created_at
+            }
+            for w in wallets
+        ],
+        "keystore_path": str(manager.keystore_dir)
+    }
+
+
+@mcp.tool()
+def wallet_export(wallet_id: str) -> dict:
+    """Export wallet as encrypted keystore JSON for backup.
+
+    The exported JSON contains:
+    - Encrypted private key (AES-256-GCM)
+    - Public key and address
+    - Encrypted mnemonic (if stored)
+
+    This is safe to backup - it requires the password to decrypt.
+    NEVER share the password along with the keystore!
+
+    Args:
+        wallet_id: Wallet ID to export
+
+    Returns:
+        Encrypted keystore JSON string for backup
+
+    Example:
+        keystore = wallet_export("wallet_abc123...")
+        # Save keystore['keystore_json'] to a secure file
+        # Remember: keep the password separate!
+    """
+    manager = get_wallet_manager()
+    keystore_json = manager.export_keystore(wallet_id)
+
+    # Parse to add metadata
+    data = json.loads(keystore_json)
+
+    return {
+        "wallet_id": wallet_id,
+        "address": data["address"],
+        "public_key": data["public_key_hex"],
+        "keystore_json": keystore_json,
+        "backup_instructions": (
+            "1. Save the keystore_json to a secure file\n"
+            "2. Store your password separately (NOT with the keystore)\n"
+            "3. To restore, use wallet_import with the keystore_json and password\n"
+            "4. NEVER share the password with anyone who has the keystore"
+        ),
+        "security_warning": (
+            "This keystore is encrypted but requires your password to decrypt. "
+            "Keep both the keystore AND your password safe and separate."
+        )
+    }
+
+
+@mcp.tool()
+def wallet_import(
+    source: str,
+    password: str,
+    name: str = "",
+    keystore_json: str = "",
+    mnemonic: str = "",
+) -> dict:
+    """Import a wallet from keystore JSON or BIP39 mnemonic.
+
+    Two import methods:
+    1. From keystore JSON: Pass keystore_json parameter
+    2. From mnemonic: Pass mnemonic parameter (12 or 24 words)
+
+    Args:
+        source: Import source - "keystore" or "mnemonic"
+        password: Password (for keystore: decryption; for mnemonic: new encryption)
+        name: Wallet name (required for mnemonic import)
+        keystore_json: Encrypted keystore JSON (for source="keystore")
+        mnemonic: BIP39 mnemonic phrase (for source="mnemonic")
+
+    Returns:
+        Imported wallet info
+
+    Example (from keystore):
+        wallet = wallet_import(
+            source="keystore",
+            password="my-password",
+            keystore_json='{"version":1,...}'
+        )
+
+    Example (from mnemonic):
+        wallet = wallet_import(
+            source="mnemonic",
+            password="new-password",
+            name="restored-wallet",
+            mnemonic="abandon abandon abandon ... art"
+        )
+    """
+    if not CRYPTO_AVAILABLE:
+        raise RuntimeError("Cryptography libraries not installed")
+
+    manager = get_wallet_manager()
+
+    if source == "keystore":
+        if not keystore_json:
+            raise ValueError("keystore_json is required for keystore import")
+
+        wallet_info = manager.import_from_keystore(keystore_json, password)
+
+    elif source == "mnemonic":
+        if not BIP39_AVAILABLE:
+            raise RuntimeError("BIP39 mnemonic library not installed. Run: pip install mnemonic")
+
+        if not mnemonic:
+            raise ValueError("mnemonic is required for mnemonic import")
+        if not name:
+            raise ValueError("name is required for mnemonic import")
+
+        wallet_info = manager.import_from_mnemonic(
+            name=name,
+            mnemonic=mnemonic,
+            password=password
+        )
+
+    else:
+        raise ValueError(f"Unknown source: {source}. Use 'keystore' or 'mnemonic'")
+
+    return {
+        "wallet_id": wallet_info.wallet_id,
+        "address": wallet_info.address,
+        "public_key": wallet_info.public_key_hex,
+        "name": wallet_info.name,
+        "created_at": wallet_info.created_at,
+        "import_source": source
+    }
+
+
+@mcp.tool()
+def wallet_export_mnemonic(
+    wallet_id: str,
+    password: str,
+) -> dict:
+    """Export the BIP39 mnemonic/seed phrase for a wallet.
+
+    ⚠️ SECURITY WARNING ⚠️
+    This exposes your seed phrase! Anyone with these words can
+    control your wallet. Use ONLY in a secure, private environment.
+
+    Best practices:
+    - Write on paper only (never digital storage)
+    - Store in a secure location (safe, vault)
+    - Never share with anyone
+    - Delete from memory after backup
+
+    Args:
+        wallet_id: Wallet ID
+        password: Password to decrypt the mnemonic
+
+    Returns:
+        Mnemonic phrase (handle with extreme care!)
+
+    Example:
+        result = wallet_export_mnemonic("wallet_abc123...", "my-password")
+        print("Write these words on paper and store securely:")
+        print(result['mnemonic'])
+    """
+    manager = get_wallet_manager()
+
+    try:
+        mnemonic = manager.export_mnemonic(wallet_id, password)
+    except ValueError as e:
+        return {
+            "error": str(e),
+            "hint": "This wallet may not have a stored mnemonic. Check wallet_list for details."
+        }
+
+    return {
+        "wallet_id": wallet_id,
+        "mnemonic": mnemonic,
+        "word_count": len(mnemonic.split()),
+        "security_warning": (
+            "⚠️ CRITICAL: These words control your wallet! "
+            "Write them on paper and store in a secure location. "
+            "NEVER store digitally or share with anyone. "
+            "Anyone with these words can steal your funds."
+        )
+    }
+
+
+@mcp.tool()
+def wallet_delete(
+    wallet_id: str,
+    confirm: bool = False,
+) -> dict:
+    """Delete a wallet from the local keystore.
+
+    ⚠️ WARNING: This is irreversible! Make sure you have a backup.
+
+    Args:
+        wallet_id: Wallet ID to delete
+        confirm: Must be True to confirm deletion
+
+    Returns:
+        Deletion result
+
+    Example:
+        result = wallet_delete("wallet_abc123...", confirm=True)
+    """
+    if not confirm:
+        return {
+            "error": "Deletion not confirmed",
+            "hint": "Set confirm=True to delete the wallet",
+            "warning": "This action is irreversible! Make sure you have a backup."
+        }
+
+    manager = get_wallet_manager()
+    deleted = manager.delete_wallet(wallet_id)
+
+    if deleted:
+        return {
+            "success": True,
+            "wallet_id": wallet_id,
+            "message": "Wallet deleted from keystore"
+        }
+    else:
+        return {
+            "success": False,
+            "error": f"Wallet not found: {wallet_id}"
+        }
 
 
 # ═══════════════════════════════════════════════════════════════

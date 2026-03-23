@@ -24,6 +24,8 @@ classifiers = [
 dependencies = [
     "fastmcp>=2.0",
     "httpx>=0.25",
+    "cryptography>=41.0",
+    "mnemonic>=0.20",
 ]
 
 [project.urls]

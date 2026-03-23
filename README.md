@@ -81,10 +81,16 @@ server.run()
 
 ## Available Tools
 
-### Wallet Management
-- `create_wallet` - Generate new wallet with encrypted storage
-- `get_balance` - Check RTC balance for any address
-- `transfer_rtc` - Send RTC tokens between wallets
+### Wallet Management (NEW!)
+- `wallet_create` - Generate new Ed25519 wallet with BIP39 seed phrase
+- `wallet_balance` - Check RTC balance for any wallet ID or address
+- `wallet_history` - Get transaction history for a wallet
+- `wallet_transfer_signed` - Sign and submit RTC transfer from local wallet
+- `wallet_list` - List all wallets in local keystore
+- `wallet_export` - Export encrypted keystore JSON for backup
+- `wallet_import` - Import wallet from keystore JSON or mnemonic
+- `wallet_export_mnemonic` - Export BIP39 seed phrase (use with caution!)
+- `wallet_delete` - Delete wallet from local keystore
 
 ### Blockchain Data
 - `get_miners` - View active miners and their stats
@@ -108,13 +114,56 @@ server.run()
 ### Create a Wallet and Check Balance
 
 ```python
-# Agent creates a new wallet
-wallet = create_wallet(name="MyAgent")
-print(f"New wallet: {wallet['address']}")
+# Create a new wallet with Ed25519 keys and BIP39 mnemonic
+wallet = wallet_create(
+    name="MyAgent",
+    password="secure-password-123",
+    store_mnemonic=True
+)
+print(f"Wallet ID: {wallet['wallet_id']}")
+print(f"Address: {wallet['address']}")
 
 # Check the balance
-balance = get_balance(wallet['address'])
+balance = wallet_balance(wallet['wallet_id'])
 print(f"Balance: {balance} RTC")
+```
+
+### Transfer RTC Tokens
+
+```python
+# Sign and transfer RTC from your wallet
+result = wallet_transfer_signed(
+    wallet_id="wallet_abc123...",
+    password="your-password",
+    to_address="RTCxyz789...",
+    amount_rtc=10.5,
+    memo="Payment for services"
+)
+print(f"Transaction ID: {result['tx_id']}")
+print(f"New balance: {result['new_balance']} RTC")
+```
+
+### Backup and Restore Wallet
+
+```python
+# Export keystore for backup
+backup = wallet_export("wallet_abc123...")
+# Save backup['keystore_json'] to a secure file
+
+# Later, restore from backup
+restored = wallet_import(
+    source="keystore",
+    password="your-password",
+    keystore_json=backup['keystore_json']
+)
+
+# Or restore from mnemonic seed phrase
+restored = wallet_import(
+    source="mnemonic",
+    password="new-password",
+    name="restored-wallet",
+    mnemonic="abandon abandon abandon ... art"  # Your 12/24 words
+)
 ```
 
 ### Find and Complete Bounties
@@ -184,11 +233,18 @@ export BEACON_MESSAGE_RETENTION="30d"
 
 ## Security
 
-- 🔒 **Private keys** are encrypted at rest using AES-256
-- 🛡️ **API keys** are never logged or transmitted in plaintext
-- 🔐 **Message encryption** for sensitive agent communications
-- ⚡ **Rate limiting** prevents abuse and ensures fair usage
-- 🎯 **Scoped permissions** limit agent actions to authorized operations
+- 🔒 **Private keys** are encrypted at rest using AES-256-GCM
+- 🔐 **BIP39 mnemonics** stored encrypted, never exposed in tool responses
+- 🛡️ **Ed25519 signatures** for all transfers
+- ⚡ **Password-based encryption** with PBKDF2 key derivation (100,000 iterations)
+- 🎯 **Secure keystore** location: `~/.rustchain/mcp_wallets/`
+
+### Wallet Security Best Practices
+
+1. **Use strong passwords** - Minimum 8 characters, mix of letters/numbers/symbols
+2. **Backup your mnemonic** - Write on paper, store in secure location
+3. **Never share passwords** - Keep separate from keystore backups
+4. **Test recovery** - Verify you can restore from mnemonic before storing funds
 
 ## Troubleshooting
 
