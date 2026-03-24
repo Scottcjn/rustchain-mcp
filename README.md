@@ -158,26 +158,54 @@ send_message(
 
 ### Wallet Management (v0.4.0+)
 
+The wallet tools provide full Ed25519 cryptographic wallet management for any MCP-compatible AI agent.
+Wallets are stored encrypted in `~/.rustchain/mcp_wallets/` using Fernet (AES-128-CBC) with PBKDF2 key derivation.
+
+#### Tool Reference
+
+| Tool | Description |
+|------|-------------|
+| `wallet_create` | Generate new Ed25519 wallet with BIP39 seed phrase |
+| `wallet_balance` | Check RTC balance for any wallet ID |
+| `wallet_history` | Get transaction history (up to 100 transactions) |
+| `wallet_transfer_signed` | Sign and submit RTC transfer with Ed25519 |
+| `wallet_list` | List all wallets in local keystore |
+| `wallet_export` | Export encrypted keystore JSON for backup |
+| `wallet_import` | Import from BIP39 seed phrase or keystore JSON |
+
+#### Security Model
+
+- ✅ Private keys **never** appear in tool responses
+- ✅ Seed phrases **never** appear in tool responses
+- ✅ Keys encrypted at rest with Fernet (AES-128-CBC + PBKDF2-HMAC-SHA256, 100k iterations)
+- ✅ Keystore directory permissions: `0700` (owner only)
+- ✅ Wallet file permissions: `0600` (owner read/write only)
+- ✅ BCOS-L2 certified (security/wallet/crypto change tier)
+
+#### Example Usage
+
 ```python
 # Create a new wallet with Ed25519 cryptography
 wallet = wallet_create(agent_name="my-trading-bot")
 print(f"Wallet address: {wallet['address']}")
 # Output: Wallet address: RTCa1b2c3d4...
 
-# List all wallets in local keystore
+# List all wallets in local keystore (~/.rustchain/mcp_wallets/)
 wallets = wallet_list()
 print(f"Total wallets: {wallets['total_wallets']}")
+for w in wallets['wallets']:
+    print(f"  {w['wallet_id']}: {w['address']}")
 
 # Check balance
 balance = wallet_balance(wallet_id="my-trading-bot")
-print(f"Balance: {balance['rtc']} RTC")
+print(f"Balance: {balance}")
 
-# Transfer RTC (signed with Ed25519)
+# Transfer RTC (signed with Ed25519 — private key never leaves local keystore)
 result = wallet_transfer_signed(
     from_wallet_id="my-trading-bot",
     to_address="RTCabc123...",
     amount_rtc=10.0,
-    password="optional-password",
+    password="optional-password",  # omit if no password was set
     memo="Payment for services"
 )
 print(f"Transaction ID: {result['transaction_id']}")
@@ -185,14 +213,21 @@ print(f"Transaction ID: {result['transaction_id']}")
 # Export encrypted backup
 backup = wallet_export(password="backup-password")
 print(f"Exported {backup['wallet_count']} wallets")
-# Store backup['encrypted_keystore'] securely!
+# IMPORTANT: Store backup['encrypted_keystore'] securely!
 
-# Import from seed phrase
+# Import from BIP39 seed phrase (12 or 24 words)
 imported = wallet_import(
     source="abandon ability able about above absent absorb abstract absurd abuse access accident",
     wallet_id="imported-wallet"
 )
 print(f"Imported wallet: {imported['address']}")
+
+# Import from previously exported keystore JSON
+restored = wallet_import(
+    source=backup['encrypted_keystore'],  # decrypt first if password-protected
+    wallet_id="restored-wallet",
+    password="backup-password"
+)
 ```
 
 ## Configuration Options

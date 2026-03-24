@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """
 Unit tests for RustChain MCP Wallet Management Tools (Issue #2302)
 
