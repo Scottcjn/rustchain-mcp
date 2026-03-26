@@ -25,6 +25,9 @@ from typing import Any
 
 import httpx
 
+
+# Self-signed cert on dev nodes
+_TLS_VERIFY = os.environ.get("TLS_VERIFY", "0") != "0"
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
