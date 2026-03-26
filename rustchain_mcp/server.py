@@ -900,6 +900,412 @@ def beacon_network_stats() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# ECOSYSTEM & DISCOVERY TOOLS
+# Cross-project info, bounty search, contributor lookup,
+# multi-node health aggregation, and e-waste preservation fleet
+# ═══════════════════════════════════════════════════════════════
+
+# All four RustChain attestation nodes
+RUSTCHAIN_NODES = [
+    {"name": "Node 1 (Primary)", "url": "https://50.28.86.131"},
+    {"name": "Node 2 (Ergo Anchor)", "url": "https://50.28.86.153"},
+    {"name": "Node 3 (Ryan/Proxmox)", "url": "http://100.88.109.32:8099"},
+    {"name": "Node 4 (HK/CognetCloud)", "url": "http://38.76.217.189:8099"},
+]
+
+BOUNTIES_REPO = "Scottcjn/Rustchain"
+BOTTUBE_BOUNTIES_REPO = "Scottcjn/BoTTube"
+PRESERVED_URL = "https://rustchain.org/preserved.html"
+
+
+@mcp.tool()
+def legend_of_elya_info() -> dict:
+    """Get information about The Legend of Elya — the N64-style LLM adventure game.
+
+    Returns project overview, architecture, GitHub stats, and open bounties
+    for the Legend of Elya project (Scottcjn/legend-of-elya, 48+ stars).
+    This is a retro N64-aesthetic game powered by local LLM inference
+    with RustChain integration.
+    """
+    info = {
+        "project": "The Legend of Elya",
+        "tagline": "N64-style adventure game powered by local LLM inference",
+        "github": "https://github.com/Scottcjn/legend-of-elya",
+        "architecture": {
+            "engine": "Godot 4.x with N64 shader pipeline",
+            "llm_backend": "llama.cpp on POWER8 S824 (512GB RAM, 128 threads)",
+            "characters": [
+                "Sophia Elya — Victorian scholar, warm and curious",
+                "Marmalade — procedural cat with 8 behaviours and 25Hz purr",
+            ],
+            "features": [
+                "Runtime GLTF model loading (OoT-style Anju base)",
+                "9 procedural N64 animations (idle sway, walk bob, talk gesture)",
+                "Qwen3-TTS voice synthesis (0.6B model, port 5500)",
+                "Triple-brain LLM routing (Claude + GPT + local)",
+                "Real weather window via OpenWeatherMap",
+                "RTC token integration for in-game economy",
+            ],
+        },
+        "tech_stack": [
+            "Godot 4 (GDScript)",
+            "llama.cpp with PSE vec_perm collapse",
+            "Qwen3-TTS for voice",
+            "RustChain RTC token rewards",
+        ],
+        "bounties": {
+            "where": "https://github.com/Scottcjn/legend-of-elya/issues",
+            "categories": [
+                "N64 shader improvements",
+                "New procedural animations",
+                "LLM personality tuning",
+                "RTC reward integration",
+                "Retro console ports",
+            ],
+        },
+        "related_projects": [
+            "sophia-edge-node — RPi retro gaming RTC miner",
+            "grail-v — CVPR 2026 emotional video grounding",
+            "ram-coffers — NUMA-aware neuromorphic weight banking",
+        ],
+    }
+
+    # Try to fetch live star count from GitHub API
+    try:
+        r = get_client().get(
+            "https://api.github.com/repos/Scottcjn/legend-of-elya",
+            headers={"Accept": "application/vnd.github.v3+json"},
+        )
+        if r.status_code == 200:
+            gh = r.json()
+            info["github_stars"] = gh.get("stargazers_count", 0)
+            info["github_forks"] = gh.get("forks_count", 0)
+            info["open_issues"] = gh.get("open_issues_count", 0)
+        else:
+            info["github_stars"] = "48+"
+    except Exception:
+        info["github_stars"] = "48+"
+
+    return info
+
+
+@mcp.tool()
+def bounty_search(
+    keyword: str = "",
+    min_rtc: float = 0,
+    max_rtc: float = 0,
+    difficulty: str = "",
+    repo: str = "rustchain",
+) -> dict:
+    """Search open RustChain and BoTTube bounties by keyword, amount, or difficulty.
+
+    Queries GitHub Issues labeled 'bounty' on the specified repository.
+    Bounties are paid in RTC tokens (1 RTC = $0.10 USD).
+
+    Args:
+        keyword: Search term to match in bounty title/body (empty = all)
+        min_rtc: Minimum RTC reward to filter by (0 = no minimum)
+        max_rtc: Maximum RTC reward to filter by (0 = no maximum)
+        difficulty: Filter by difficulty label (easy, medium, hard, expert).
+                    Empty = all difficulties.
+        repo: Which repo to search: "rustchain" (default), "bottube", or "all"
+
+    Returns matching open bounty issues with title, reward, difficulty, and URL.
+    """
+    repos = []
+    if repo in ("rustchain", "all"):
+        repos.append(BOUNTIES_REPO)
+    if repo in ("bottube", "all"):
+        repos.append(BOTTUBE_BOUNTIES_REPO)
+    if not repos:
+        repos.append(BOUNTIES_REPO)
+
+    all_bounties = []
+    client = get_client()
+
+    for repo_name in repos:
+        # Build GitHub search query
+        query_parts = [f"repo:{repo_name}", "is:issue", "is:open", "label:bounty"]
+        if keyword:
+            query_parts.append(keyword)
+        if difficulty:
+            query_parts.append(f"label:{difficulty}")
+
+        query = " ".join(query_parts)
+
+        try:
+            r = client.get(
+                "https://api.github.com/search/issues",
+                params={"q": query, "per_page": 30, "sort": "created", "order": "desc"},
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            r.raise_for_status()
+            items = r.json().get("items", [])
+        except Exception:
+            items = []
+
+        for item in items:
+            # Extract RTC amount from title or labels
+            rtc_amount = _extract_rtc_amount(item.get("title", ""), item.get("body", ""))
+            labels = [lb.get("name", "") for lb in item.get("labels", [])]
+
+            bounty = {
+                "title": item.get("title", ""),
+                "url": item.get("html_url", ""),
+                "number": item.get("number"),
+                "repo": repo_name,
+                "rtc_reward": rtc_amount,
+                "labels": labels,
+                "created_at": item.get("created_at", ""),
+                "comments": item.get("comments", 0),
+            }
+
+            # Apply RTC filters
+            if min_rtc > 0 and rtc_amount < min_rtc:
+                continue
+            if max_rtc > 0 and rtc_amount > max_rtc:
+                continue
+
+            all_bounties.append(bounty)
+
+    return {
+        "total": len(all_bounties),
+        "bounties": all_bounties[:25],
+        "note": f"Showing first 25 of {len(all_bounties)}" if len(all_bounties) > 25 else None,
+        "tip": "Claim a bounty by commenting on the GitHub issue, then submit a PR.",
+    }
+
+
+def _extract_rtc_amount(title: str, body: str = "") -> float:
+    """Extract RTC reward amount from bounty title or body text."""
+    import re
+    # Match patterns like "100 RTC", "50RTC", "150 rtc"
+    for text in [title, body or ""]:
+        match = re.search(r"(\d+(?:\.\d+)?)\s*RTC", text, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+    return 0.0
+
+
+@mcp.tool()
+def contributor_lookup(username: str) -> dict:
+    """Look up a contributor's RTC balance and merge history across RustChain repos.
+
+    Queries the RustChain network for wallet balance and GitHub for
+    merged pull requests by the contributor.
+
+    Args:
+        username: GitHub username of the contributor (e.g., "createkr",
+                  "LaphoqueRC", "CelebrityPunks", "mtarcure")
+
+    Returns RTC balance (if wallet found), merged PR count, and recent merges.
+    """
+    client = get_client()
+    result = {
+        "username": username,
+        "github_profile": f"https://github.com/{username}",
+    }
+
+    # Search for merged PRs across RustChain repos
+    merged_prs = []
+    for repo_name in [BOUNTIES_REPO, BOTTUBE_BOUNTIES_REPO]:
+        try:
+            query = f"repo:{repo_name} is:pr is:merged author:{username}"
+            r = client.get(
+                "https://api.github.com/search/issues",
+                params={"q": query, "per_page": 20, "sort": "updated", "order": "desc"},
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                for item in items:
+                    merged_prs.append({
+                        "title": item.get("title", ""),
+                        "url": item.get("html_url", ""),
+                        "repo": repo_name,
+                        "merged_at": item.get("closed_at", ""),
+                    })
+        except Exception:
+            pass
+
+    result["merged_prs"] = {
+        "total": len(merged_prs),
+        "recent": merged_prs[:10],
+        "note": f"Showing 10 of {len(merged_prs)}" if len(merged_prs) > 10 else None,
+    }
+
+    # Try to look up RTC balance by common wallet naming conventions
+    wallet_ids_to_try = [username, f"rtc-{username}", username.lower()]
+    for wallet_id in wallet_ids_to_try:
+        try:
+            r = client.get(
+                f"{RUSTCHAIN_NODE}/balance",
+                params={"miner_id": wallet_id},
+            )
+            if r.status_code == 200:
+                balance_data = r.json()
+                if balance_data.get("balance_rtc", 0) > 0 or balance_data.get("amount_i64", 0) > 0:
+                    result["rtc_balance"] = balance_data
+                    result["wallet_id"] = wallet_id
+                    break
+        except Exception:
+            pass
+
+    if "rtc_balance" not in result:
+        result["rtc_balance"] = None
+        result["note"] = (
+            f"No RTC wallet found for '{username}'. The contributor may use a "
+            "different wallet ID. Check the bounty ledger or ask them directly."
+        )
+
+    return result
+
+
+@mcp.tool()
+def network_health() -> dict:
+    """Get aggregate health status of all 4 RustChain attestation nodes.
+
+    Queries each of the 4 geographically distributed RustChain nodes
+    and returns their health, version, uptime, and reachability.
+
+    Nodes:
+    - Node 1 (50.28.86.131) — Primary, LiquidWeb VPS
+    - Node 2 (50.28.86.153) — Ergo Anchor, LiquidWeb VPS
+    - Node 3 (100.88.109.32) — Ryan's Proxmox, first external node
+    - Node 4 (38.76.217.189) — CognetCloud Hong Kong, first Asian node
+
+    Returns per-node health and an aggregate summary.
+    """
+    client = get_client()
+    nodes_status = []
+    healthy_count = 0
+
+    for node in RUSTCHAIN_NODES:
+        status = {
+            "name": node["name"],
+            "url": node["url"],
+        }
+        try:
+            r = client.get(f"{node['url']}/health", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                status["healthy"] = data.get("ok", False)
+                status["version"] = data.get("version", "unknown")
+                status["uptime_s"] = data.get("uptime_s", 0)
+                status["db_rw"] = data.get("db_rw", False)
+                status["tip_age_slots"] = data.get("tip_age_slots", 0)
+                if data.get("ok"):
+                    healthy_count += 1
+            else:
+                status["healthy"] = False
+                status["error"] = f"HTTP {r.status_code}"
+        except Exception as e:
+            status["healthy"] = False
+            status["error"] = str(e)[:120]
+
+        nodes_status.append(status)
+
+    total = len(RUSTCHAIN_NODES)
+    return {
+        "summary": {
+            "total_nodes": total,
+            "healthy": healthy_count,
+            "degraded": total - healthy_count,
+            "network_ok": healthy_count >= 2,  # Majority quorum
+        },
+        "nodes": nodes_status,
+    }
+
+
+@mcp.tool()
+def green_tracker() -> dict:
+    """Get the fleet of preserved machines from the RustChain green tracker.
+
+    Returns the list of vintage and exotic machines preserved from e-waste
+    by the RustChain Proof-of-Antiquity network. These machines earn RTC
+    tokens for running, incentivizing preservation over disposal.
+
+    Data sourced from https://rustchain.org/preserved.html
+    """
+    # The preserved.html page is a static page; try to fetch and parse it.
+    # Fall back to known fleet data if the page is unreachable.
+    client = get_client()
+    machines = []
+
+    try:
+        r = client.get(PRESERVED_URL, timeout=15)
+        if r.status_code == 200:
+            machines = _parse_preserved_html(r.text)
+    except Exception:
+        pass
+
+    # Fall back to known fleet if parsing failed or returned nothing
+    if not machines:
+        machines = _known_preserved_fleet()
+
+    total_machines = len(machines)
+    arch_counts = {}
+    for m in machines:
+        arch = m.get("architecture", "unknown")
+        arch_counts[arch] = arch_counts.get(arch, 0) + 1
+
+    return {
+        "total_preserved": total_machines,
+        "by_architecture": arch_counts,
+        "machines": machines,
+        "source": PRESERVED_URL,
+        "mission": (
+            "Every machine mining RTC is a machine saved from the landfill. "
+            "Proof-of-Antiquity turns e-waste into economic actors."
+        ),
+    }
+
+
+def _parse_preserved_html(html: str) -> list[dict]:
+    """Parse the preserved.html page for machine entries."""
+    import re
+    machines = []
+    # Look for table rows or structured data in the HTML
+    # The page typically has <tr> rows with machine info
+    row_pattern = re.compile(
+        r"<tr[^>]*>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>([^<]+)</td>",
+        re.IGNORECASE,
+    )
+    for match in row_pattern.finditer(html):
+        name = match.group(1).strip()
+        arch = match.group(2).strip()
+        status = match.group(3).strip()
+        if name and name.lower() not in ("machine", "name", "device"):
+            machines.append({
+                "name": name,
+                "architecture": arch,
+                "status": status,
+            })
+    return machines
+
+
+def _known_preserved_fleet() -> list[dict]:
+    """Fallback: known fleet of preserved machines mining RTC."""
+    return [
+        {"name": "Power Mac G4 MDD (dual-g4-125)", "architecture": "PowerPC G4", "multiplier": "2.5x", "status": "active"},
+        {"name": "PowerBook G4 (g4-powerbook-115)", "architecture": "PowerPC G4", "multiplier": "2.5x", "status": "active"},
+        {"name": "PowerBook G4 (g4-powerbook-real)", "architecture": "PowerPC G4", "multiplier": "2.5x", "status": "active"},
+        {"name": "Power Mac G5 Dual (ppc_g5_130)", "architecture": "PowerPC G5", "multiplier": "2.0x", "status": "active"},
+        {"name": "Power Mac G5 Dual (.179)", "architecture": "PowerPC G5", "multiplier": "2.0x", "status": "active"},
+        {"name": "IBM POWER8 S824", "architecture": "POWER8", "multiplier": "1.5x", "status": "active"},
+        {"name": "Mac Mini M2", "architecture": "Apple Silicon", "multiplier": "1.2x", "status": "active"},
+        {"name": "Dell C4130 (2x V100)", "architecture": "x86_64", "multiplier": "1.0x", "status": "active"},
+        {"name": "Dell C4130 (2x M40)", "architecture": "x86_64", "multiplier": "1.0x", "status": "active"},
+        {"name": "HP Victus 16 (Ryzen 7 8845HS)", "architecture": "x86_64", "multiplier": "1.0x", "status": "active"},
+        {"name": "Ryzen 9 7950X Tower", "architecture": "x86_64", "multiplier": "1.0x", "status": "active"},
+        {"name": "486 Laptop", "architecture": "i486", "multiplier": "1.4x", "status": "reserve"},
+        {"name": "386 Laptop", "architecture": "i386", "multiplier": "1.4x", "status": "reserve"},
+        {"name": "SPARCstations", "architecture": "SPARC", "multiplier": "2.0x+", "status": "reserve"},
+        {"name": "PowerBook G4 #3", "architecture": "PowerPC G4", "multiplier": "2.5x", "status": "reserve"},
+    ]
+
+
+# ═══════════════════════════════════════════════════════════════
 # RESOURCES (Read-only context for LLMs)
 # ═══════════════════════════════════════════════════════════════
 
