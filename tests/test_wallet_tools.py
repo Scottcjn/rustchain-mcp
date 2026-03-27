@@ -548,3 +548,239 @@ class TestKeystoreSecurity:
         assert "private_key" not in result
         assert "mnemonic" not in result
         assert "encrypted_private_key" not in result
+
+
+# ═══════════════════════════════════════════════════════════════
+# Test: MCP Server Tool Integration (with mocked HTTP)
+# ═══════════════════════════════════════════════════════════════
+
+class TestMCPServerWalletTools:
+    """Integration tests for MCP server wallet tools with mocked HTTP."""
+
+    def test_mcp_wallet_create_tool(self, temp_keystore):
+        """Test wallet_create MCP tool returns correct structure."""
+        from rustchain_mcp.server import wallet_create
+
+        result = wallet_create(agent_name="mcp-test-agent", password="secure-pass")
+
+        assert isinstance(result, dict)
+        assert "wallet_id" in result
+        assert "address" in result
+        assert "public_key" in result
+        assert "message" in result
+        # Security check: no secrets in response
+        assert "private_key" not in result
+        assert "mnemonic" not in result
+        assert result["address"].startswith("RTC")
+        assert result["wallet_id"] == "mcp-test-agent"
+
+    def test_mcp_wallet_list_tool(self, temp_keystore):
+        """Test wallet_list MCP tool returns correct structure."""
+        from rustchain_mcp.server import wallet_create, wallet_list
+
+        # Create some wallets
+        wallet_create(agent_name="list-agent-1", password="pass1")
+        wallet_create(agent_name="list-agent-2", password="pass2")
+
+        result = wallet_list()
+
+        assert isinstance(result, dict)
+        assert "total_wallets" in result
+        assert "wallets" in result
+        assert "keystore_path" in result
+        assert result["total_wallets"] == 2
+        assert isinstance(result["wallets"], list)
+
+    def test_mcp_wallet_list_no_secrets(self, temp_keystore):
+        """Test wallet_list never exposes private keys."""
+        from rustchain_mcp.server import wallet_create, wallet_list
+
+        wallet_create(agent_name="secret-agent", password="topsecret")
+        result = wallet_list()
+
+        for w in result["wallets"]:
+            assert "private_key" not in w
+            assert "mnemonic" not in w
+            assert "encrypted_private_key" not in w
+
+    def test_mcp_wallet_export_tool(self, temp_keystore):
+        """Test wallet_export MCP tool returns encrypted backup."""
+        from rustchain_mcp.server import wallet_create, wallet_export
+
+        wallet_create(agent_name="export-agent", password="")
+        result = wallet_export(password="backup-password")
+
+        assert isinstance(result, dict)
+        assert "encrypted_keystore" in result
+        assert "wallet_count" in result
+        assert "message" in result
+        assert "warning" in result
+        assert result["wallet_count"] == 1
+
+    def test_mcp_wallet_import_from_seed(self, temp_keystore):
+        """Test wallet_import MCP tool imports from seed phrase."""
+        from rustchain_mcp.server import wallet_import
+
+        seed_phrase = (
+            "abandon ability able about above absent absorb abstract absurd "
+            "abuse access accident"
+        )
+        result = wallet_import(
+            source=seed_phrase, wallet_id="seed-import-test", password=""
+        )
+
+        assert isinstance(result, dict)
+        assert "wallet_id" in result or "wallets_imported" in result
+
+    def test_mcp_wallet_balance_with_mock(self, temp_keystore):
+        """Test wallet_balance MCP tool with mocked HTTP response."""
+        from rustchain_mcp.server import wallet_create, wallet_balance
+
+        wallet_create(agent_name="balance-agent", password="")
+
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"balance": 42.0, "wallet_id": "balance-agent"}
+        mock_response.raise_for_status = mock.Mock()
+
+        with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
+            mock_client = mock.Mock()
+            mock_client.get.return_value = mock_response
+            mock_client_fn.return_value = mock_client
+
+            result = wallet_balance(wallet_id="balance-agent")
+
+        assert isinstance(result, dict)
+        assert result.get("balance") == 42.0
+
+    def test_mcp_wallet_history_with_mock(self, temp_keystore):
+        """Test wallet_history MCP tool with mocked HTTP response."""
+        from rustchain_mcp.server import wallet_create, wallet_history
+
+        wallet_create(agent_name="history-agent", password="")
+
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {
+            "transactions": [
+                {
+                    "type": "receive",
+                    "amount": 10.0,
+                    "timestamp": 1700000000,
+                    "counterparty": "RTCsender",
+                }
+            ],
+            "total": 1,
+        }
+        mock_response.raise_for_status = mock.Mock()
+
+        with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
+            mock_client = mock.Mock()
+            mock_client.get.return_value = mock_response
+            mock_client_fn.return_value = mock_client
+
+            result = wallet_history(wallet_id="history-agent", limit=10)
+
+        assert isinstance(result, dict)
+        assert "transactions" in result
+
+    def test_mcp_wallet_transfer_signed_missing_wallet(self, temp_keystore):
+        """Test wallet_transfer_signed returns error for unknown wallet."""
+        from rustchain_mcp.server import wallet_transfer_signed
+
+        result = wallet_transfer_signed(
+            from_wallet_id="nonexistent-wallet",
+            to_address="RTCrecipient",
+            amount_rtc=5.0,
+            password="",
+            memo="test",
+        )
+
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "nonexistent-wallet" in result["error"]
+
+    def test_mcp_wallet_transfer_signed_success(self, temp_keystore):
+        """Test wallet_transfer_signed with valid wallet and mocked network."""
+        from rustchain_mcp.server import wallet_create, wallet_transfer_signed
+
+        wallet_create(agent_name="sender-wallet", password="")
+
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {
+            "transaction_id": "tx_abc123",
+            "new_balance": 90.0,
+            "status": "submitted",
+        }
+        mock_response.raise_for_status = mock.Mock()
+
+        with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
+            mock_client = mock.Mock()
+            mock_client.post.return_value = mock_response
+            mock_client_fn.return_value = mock_client
+
+            result = wallet_transfer_signed(
+                from_wallet_id="sender-wallet",
+                to_address="RTCrecipient0000",
+                amount_rtc=10.0,
+                password="",
+                memo="bounty payment",
+            )
+
+        assert isinstance(result, dict)
+        # Should succeed (not have an error key at top level)
+        assert "error" not in result or result.get("success") is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# Test: Ed25519 Signing Correctness
+# ═══════════════════════════════════════════════════════════════
+
+class TestEd25519Signing:
+    """Tests specifically for Ed25519 signing correctness."""
+
+    def test_signing_produces_different_results_per_message(self, temp_keystore):
+        """Different messages produce different signatures."""
+        from rustchain_mcp import rustchain_crypto
+
+        rustchain_crypto.create_wallet("sig-test-agent", "")
+        wallet = rustchain_crypto.load_wallet("sig-test-agent", "")
+
+        sig1 = rustchain_crypto.sign_message(b"message one", wallet["private_key"])
+        sig2 = rustchain_crypto.sign_message(b"message two", wallet["private_key"])
+
+        assert sig1 != sig2
+
+    def test_different_wallets_produce_different_signatures(self, temp_keystore):
+        """Same message signed by different wallets produces different signatures."""
+        from rustchain_mcp import rustchain_crypto
+
+        rustchain_crypto.create_wallet("signer-a", "")
+        rustchain_crypto.create_wallet("signer-b", "")
+
+        wallet_a = rustchain_crypto.load_wallet("signer-a", "")
+        wallet_b = rustchain_crypto.load_wallet("signer-b", "")
+
+        msg = b"same message"
+        sig_a = rustchain_crypto.sign_message(msg, wallet_a["private_key"])
+        sig_b = rustchain_crypto.sign_message(msg, wallet_b["private_key"])
+
+        assert sig_a != sig_b
+
+    def test_wallet_addresses_are_unique(self, temp_keystore):
+        """Each wallet creation produces a unique address."""
+        from rustchain_mcp import rustchain_crypto
+
+        wallets = []
+        for i in range(5):
+            w = rustchain_crypto.create_wallet(f"unique-agent-{i}", "")
+            wallets.append(w["address"])
+
+        # All addresses should be unique
+        assert len(set(wallets)) == 5
+
+    def test_nacl_library_used_for_signing(self, temp_keystore):
+        """Test that PyNaCl is used for Ed25519 signing when available."""
+        from rustchain_mcp import rustchain_crypto
+
+        assert rustchain_crypto.NACL_AVAILABLE, (
+            "PyNaCl should be available for Ed25519 signing"
+        )
