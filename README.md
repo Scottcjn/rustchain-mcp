@@ -1,6 +1,7 @@
 # RustChain + BoTTube + Beacon MCP Server
 
 [![BCOS Certified](https://img.shields.io/badge/BCOS-Certified_Open_Source-blue)](https://github.com/Scottcjn/Rustchain)
+[![RustChain Contributor](https://img.shields.io/badge/RustChain-Contributor-blue)](https://github.com/Scottcjn/Rustchain)
 [![PyPI](https://img.shields.io/pypi/v/rustchain-mcp)](https://pypi.org/project/rustchain-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
