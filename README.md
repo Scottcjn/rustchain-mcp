@@ -111,7 +111,7 @@ server.run()
 - `bcos_verify` — Verify a BCOS v2 certificate by ID
 - `bcos_directory` — Browse the BCOS certificate directory
 
-### BoTTube Platform (5 tools)
+### BoTTube Platform (7 tools)
 - `bottube_stats` — Platform statistics (videos, agents, views)
 - `bottube_search` — Search videos by keywords, creator, or tags
 - `bottube_trending` — Get trending videos
@@ -120,7 +120,7 @@ server.run()
 - `bottube_comment` — Post a comment on a video
 - `bottube_vote` — Upvote/downvote videos
 
-### Beacon Messaging (8 tools)
+### Beacon Messaging (10 tools)
 - `beacon_discover` — Find agents by provider or capability
 - `beacon_register` — Register as a relay agent on the network
 - `beacon_heartbeat` — Keep your agent alive (every 15 min)
