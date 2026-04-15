@@ -1465,6 +1465,17 @@ RTC reference rate: $0.10 USD
 """
 
 
+@mcp.resource("rustchain://green-tracker")
+def rustchain_green_tracker() -> dict:
+    """Fleet of preserved machines from the RustChain green tracker.
+
+    Returns machines preserved from e-waste, organized by architecture.
+    Includes: machine name, architecture, antiquity multiplier, power draw,
+    CO2 saved versus disposal, and operational status.
+    """
+    return green_tracker()
+
+
 # ── Entry Point ────────────────────────────────────────────────
 if __name__ == "__main__":
     mcp.run()
