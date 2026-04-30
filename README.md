@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/scottcjn-rustchain-mcp-badge.png)](https://mseep.ai/app/scottcjn-rustchain-mcp)
+
 # RustChain + BoTTube + Beacon MCP Server
 
 [![BCOS Certified](https://img.shields.io/badge/BCOS-Certified_Open_Source-blue)](https://github.com/Scottcjn/Rustchain)
