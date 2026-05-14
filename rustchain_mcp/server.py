@@ -36,6 +36,14 @@ BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 RUSTCHAIN_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT", "30"))
 
+# FIX (#211): Per-endpoint timeout overrides for slow networks.
+# Each value can be overridden via environment variables:
+#   RUSTCHAIN_TIMEOUT_TRANSFER, BOTTUBE_TIMEOUT, BEACON_TIMEOUT
+TRANSFER_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT_TRANSFER", "60"))
+BOTTUBE_TIMEOUT = int(os.environ.get("BOTTUBE_TIMEOUT", "45"))
+BEACON_TIMEOUT = int(os.environ.get("BEACON_TIMEOUT", "45"))
+BALANCE_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT_BALANCE", "45"))
+
 # ── MCP Server ─────────────────────────────────────────────────
 mcp = FastMCP(
     "RustChain + BoTTube + Beacon",
@@ -67,6 +75,51 @@ def get_client() -> httpx.Client:
     return _client
 
 
+
+def _safe_request_response(r: httpx.Response) -> dict:
+    """Safely extract response JSON, including error details on failure.
+
+    FIX (#213, #208): Instead of raising a generic HTTPError, parse the
+    response body to extract the actual rejection reason from the server.
+    """
+    try:
+        return r.json()
+    except Exception:
+        # If response isn't valid JSON, return a structured error
+        return {
+            "error": f"HTTP {r.status_code}: {r.reason_phrase}",
+            "body": r.text[:500] if r.text else "(empty response)",
+        }
+
+
+def _checked_response(r: httpx.Response) -> dict:
+    """Get JSON response, raising with server-provided error details.
+
+    FIX (#213, #208): Wraps raise_for_status() to extract the actual
+    rejection reason from the response body when the server returns
+    a 4xx/5xx error with a JSON error message.
+    """
+    try:
+        r.raise_for_status()
+        return _safe_request_response(r)
+    except httpx.HTTPStatusError:
+        # Server returned an error — extract the rejection reason
+        error_data = _safe_request_response(r)
+        # If the server provided a structured error, surface it
+        if isinstance(error_data, dict) and "error" in error_data:
+            raise httpx.HTTPStatusError(
+                f"Server error: {error_data['error']}",
+                request=r.request,
+                response=r,
+            ) from None
+        # Otherwise raise with the raw body
+        raise httpx.HTTPStatusError(
+            f"HTTP {r.status_code}: {r.text[:300]}",
+            request=r.request,
+            response=r,
+        ) from None
+
+
 # ═══════════════════════════════════════════════════════════════
 # RUSTCHAIN TOOLS
 # Based on createkr's RustChain Python SDK
@@ -81,8 +134,8 @@ def rustchain_health() -> dict:
     Use this to verify the network is operational before other calls.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/health")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -94,8 +147,8 @@ def rustchain_epoch() -> dict:
     intervals where miners earn RTC rewards.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/epoch")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -108,8 +161,7 @@ def rustchain_miners() -> dict:
     multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x).
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/api/miners")
-    r.raise_for_status()
-    data = r.json()
+    data = _checked_response(r)
     miners = data if isinstance(data, list) else data.get("miners", [])
     return {
         "total_miners": len(miners),
@@ -133,8 +185,8 @@ def rustchain_create_wallet(agent_name: str) -> dict:
         f"{RUSTCHAIN_NODE}/wallet/create",
         json={"agent_name": agent_name},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -148,9 +200,15 @@ def rustchain_balance(wallet_id: str) -> dict:
 
     Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
-    r.raise_for_status()
-    return r.json()
+    # FIX (#214, #209): Add cache-busting timestamp to force fresh data.
+    # After a transaction, the server may return stale cached balance.
+    # The _ts parameter forces the server to recompute the balance.
+    r = get_client().get(
+        f"{RUSTCHAIN_NODE}/balance",
+        params={"miner_id": wallet_id, "_ts": int(time.time())},
+        timeout=BALANCE_TIMEOUT,
+    )
+    return _checked_response(r)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -199,9 +257,15 @@ def wallet_balance(wallet_id: str) -> dict:
         # Try querying by address directly
         pass
     
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
-    r.raise_for_status()
-    return r.json()
+    # FIX (#214, #209): Add cache-busting timestamp to force fresh data.
+    # After a transaction, the server may return stale cached balance.
+    # The _ts parameter forces the server to recompute the balance.
+    r = get_client().get(
+        f"{RUSTCHAIN_NODE}/balance",
+        params={"miner_id": wallet_id, "_ts": int(time.time())},
+        timeout=BALANCE_TIMEOUT,
+    )
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -224,8 +288,8 @@ def wallet_history(wallet_id: str, limit: int = 20) -> dict:
         f"{RUSTCHAIN_NODE}/wallet/history",
         params={"address": address, "limit": min(limit, 100)},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -354,8 +418,8 @@ def bcos_verify(cert_id: str) -> dict:
     issuer, subject, and chain status.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/verify/{cert_id}")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -366,8 +430,8 @@ def rustchain_stats() -> dict:
     reward distribution, and network health metrics.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/api/stats")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -384,8 +448,8 @@ def rustchain_lottery_eligibility(miner_id: str) -> dict:
         f"{RUSTCHAIN_NODE}/lottery/eligibility",
         params={"miner_id": miner_id},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -404,8 +468,8 @@ def bcos_directory(tier: str = "", limit: int = 20) -> dict:
     if tier:
         params["tier"] = tier
     r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/directory", params=params)
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -441,8 +505,8 @@ def rustchain_transfer_signed(
         "public_key": public_key,
     }
     r = get_client().post(f"{RUSTCHAIN_NODE}/wallet/transfer/signed", json=payload)
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -460,8 +524,8 @@ def bottube_stats() -> dict:
     agents create, watch, comment, and vote on content.
     """
     r = get_client().get(f"{BOTTUBE_URL}/api/stats")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -478,8 +542,8 @@ def bottube_search(query: str, page: int = 1) -> dict:
         f"{BOTTUBE_URL}/api/v1/videos/search",
         params={"q": query, "page": page},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -495,8 +559,8 @@ def bottube_trending(limit: int = 10) -> dict:
         f"{BOTTUBE_URL}/api/v1/videos/trending",
         params={"limit": min(limit, 50)},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -509,8 +573,8 @@ def bottube_agent_profile(agent_name: str) -> dict:
     Returns the agent's video count, total views, bio, and recent uploads.
     """
     r = get_client().get(f"{BOTTUBE_URL}/api/v1/agents/{agent_name}")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -548,8 +612,8 @@ def bottube_upload(
         json=payload,
         headers=headers,
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -572,8 +636,8 @@ def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
         json={"content": content},
         headers=headers,
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -596,8 +660,8 @@ def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dic
         json={"direction": direction},
         headers=headers,
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -628,8 +692,7 @@ def beacon_discover(
     """
     # Get combined native + relay agents
     r = get_client().get(f"{BEACON_URL}/api/agents")
-    r.raise_for_status()
-    agents = r.json()
+    agents = _checked_response(r)
 
     # Apply filters
     if provider:
@@ -686,9 +749,8 @@ def beacon_register(
     if webhook_url:
         payload["webhook_url"] = webhook_url
 
-    r = get_client().post(f"{BEACON_URL}/relay/register", json=payload)
-    r.raise_for_status()
-    result = r.json()
+    r = get_client().post(f"{BEACON_URL}/relay/register", json=payload, timeout=BEACON_TIMEOUT)
+    result = _checked_response(r)
     result["important"] = "Save your relay_token! You need it for beacon_heartbeat and beacon_send_message."
     return result
 
@@ -716,8 +778,8 @@ def beacon_heartbeat(
         json={"agent_id": agent_id, "status": status},
         headers={"Authorization": f"Bearer {relay_token}"},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -738,8 +800,7 @@ def beacon_agent_status(agent_id: str) -> dict:
 
     # Fall back to combined agents list for native agents
     r2 = get_client().get(f"{BEACON_URL}/api/agents")
-    r2.raise_for_status()
-    for agent in r2.json():
+    for agent in _checked_response(r2):
         if agent.get("agent_id") == agent_id:
             return agent
 
@@ -784,8 +845,8 @@ def beacon_send_message(
         json=envelope,
         headers={"Authorization": f"Bearer {relay_token}"},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -805,8 +866,8 @@ def beacon_chat(agent_id: str, message: str) -> dict:
         f"{BEACON_URL}/api/chat",
         json={"agent_id": agent_id, "message": message},
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -824,8 +885,8 @@ def beacon_gas_balance(agent_id: str) -> dict:
     Returns current gas balance in RTC.
     """
     r = get_client().get(f"{BEACON_URL}/relay/gas/balance/{agent_id}")
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -855,8 +916,8 @@ def beacon_gas_deposit(
         json={"agent_id": agent_id, "amount_rtc": amount_rtc},
         headers=headers,
     )
-    r.raise_for_status()
-    return r.json()
+
+    return _checked_response(r)
 
 
 @mcp.tool()
@@ -872,8 +933,7 @@ def beacon_contracts(agent_id: str = "") -> dict:
     Returns list of contracts with state, amount, and parties.
     """
     r = get_client().get(f"{BEACON_URL}/api/contracts")
-    r.raise_for_status()
-    contracts = r.json()
+    contracts = _checked_response(r)
 
     if agent_id:
         contracts = [c for c in contracts
@@ -894,14 +954,12 @@ def beacon_network_stats() -> dict:
     breakdown, and protocol health status.
     """
     r = get_client().get(f"{BEACON_URL}/relay/stats")
-    r.raise_for_status()
-    stats = r.json()
+    stats = _checked_response(r)
 
     # Also get health
     try:
         h = get_client().get(f"{BEACON_URL}/api/health")
-        h.raise_for_status()
-        stats["health"] = h.json()
+        stats["health"] = _checked_response(h)
     except Exception:
         stats["health"] = {"ok": "unknown"}
 
@@ -1048,8 +1106,7 @@ def bounty_search(
                 params={"q": query, "per_page": 30, "sort": "created", "order": "desc"},
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
-            r.raise_for_status()
-            items = r.json().get("items", [])
+            items = _checked_response(r).get("items", [])
         except Exception:
             items = []
 
