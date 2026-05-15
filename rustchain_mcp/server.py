@@ -67,11 +67,20 @@ def get_client() -> httpx.Client:
     return _client
 
 
+def _handle_api_error(response: httpx.Response) -> str:
+    """Extract detailed rejection reasons from RustChain node responses."""
+    try:
+        error_data = response.json()
+        return error_data.get("error") or error_data.get("message") or f"HTTP {response.status_code}"
+    except Exception:
+        return f"HTTP {response.status_code}: {response.text[:200]}"
+
+
 # ═══════════════════════════════════════════════════════════════
 # RUSTCHAIN TOOLS
 # Based on createkr's RustChain Python SDK
 # https://github.com/createkr/Rustchain/tree/main/sdk
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════
 
 @mcp.tool()
 def rustchain_health() -> dict:
@@ -81,7 +90,10 @@ def rustchain_health() -> dict:
     Use this to verify the network is operational before other calls.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/health")
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        return {"error": _handle_api_error(r), "status": "unhealthy"}
     return r.json()
 
 
@@ -94,7 +106,10 @@ def rustchain_epoch() -> dict:
     intervals where miners earn RTC rewards.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/epoch")
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        return {"error": _handle_api_error(r), "status": "error"}
     return r.json()
 
 
@@ -108,7 +123,10 @@ def rustchain_miners() -> dict:
     multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x).
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/api/miners")
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        return {"error": _handle_api_error(r), "status": "error"}
     data = r.json()
     miners = data if isinstance(data, list) else data.get("miners", [])
     return {
@@ -148,7 +166,10 @@ def rustchain_balance(wallet_id: str) -> dict:
 
     Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
+    # Bypass any potential local caching by forcing a fresh network request
+    # and adding a timestamp to the query if the server supports it.
+    params = {"miner_id": wallet_id, "timestamp": int(time.time() * 1000)}
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params=params)
     r.raise_for_status()
     return r.json()
 
