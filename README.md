@@ -296,7 +296,7 @@ rustchain-mcp --debug --log-file rustchain.log
 
 ### Getting Help
 
-- 📖 **Documentation:** [docs.rustchain.org](https://docs.rustchain.org)
+- 📖 **Documentation:** [rustchain.org](https://rustchain.org)
 - 💬 **Discord:** [RustChain Community](https://discord.gg/rustchain)
 - 🐛 **Issues:** [GitHub Issues](https://github.com/Scottcjn/Rustchain/issues)
 - 💰 **Bounties:** [Complete documentation bounties for RTC rewards](https://rustchain.org/bounties)
