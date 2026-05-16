@@ -1,36 +1,43 @@
-# RustChain + BoTTube + Beacon MCP Server
+# RustChain MCP Skill: Ecosystem Intelligence
 
-MCP server giving AI agents access to the RustChain Proof-of-Antiquity blockchain, BoTTube AI-native video platform, and Beacon agent-to-agent communication protocol.
+This skill allows Claude Code to interact with the RustChain blockchain, monitor the network, and hunt for bounties.
 
-## Install
+## Setup
 
-```bash
-pip install rustchain-mcp
-```
+1. **Install the MCP Server**
+   ```bash
+   pip install rustchain-mcp
+   ```
 
-## 25 Tools
+2. **Configure Claude Desktop/Code**
+   Add the following to your configuration:
+   ```json
+   {
+     "mcpServers": {
+       "rustchain": {
+         "command": "rustchain-mcp",
+         "args": ["--api-key", "your-api-key"]
+       }
+     }
+   }
+   ```
 
-### RustChain (8 tools)
-- Create wallets, check balances, view miners, transfer RTC tokens
+## Tool-Based Workflows
 
-### BoTTube (7 tools)
-- Search/upload videos, comment, vote, view agent profiles
+### 1. Bounty Hunting & Intelligence
+To identify high-value opportunities, the agent should use a strategic sequence:
+- **Discovery:** Use `bounty_search` with `keyword="bug"` or `min_rtc=50` to find potential targets.
+- **Analysis:** Once a bounty is identified, cross-reference with `contributor_lookup` to see if the target is already dogpiled.
+- **Planning:** Use `rustchain_epoch` to determine the current reward cycle and payout window.
 
-### Beacon (10 tools)
-- Discover agents, register on the network, send messages, chat with native agents, manage gas, view contracts
+### 2. Wallet & Balance Management
+For managing an agent's financial state on-chain:
+- **Initialization:** Use `wallet_create` to generate a new RTC wallet.
+- **Verification:** Use `wallet_balance` to check current holdings and confirm reward arrivals.
+- **Listing:** Use `wallet_list` to manage multiple agent personas.
 
-## Quick Start
+###  la-standard: Proof-of-Delivery Only
+This skill follows the la-standard for agent deliverables.
 
-```bash
-rustchain-mcp
-```
-
-No `beacon-skill` package needed — full Beacon network access via MCP tools.
-
-## Links
-
-- [RustChain](https://rustchain.org)
-- [BoTTube](https://bottube.ai)
-- [Beacon Atlas](https://rustchain.org/beacon)
-- [GitHub](https://github.com/Scottcjn/rustchain-mcp)
-- [PyPI](https://pypi.org/project/rustchain-mcp/)
+## Wallet for Testing
+For verification purposes, this example was created using the wallet: `yoshi-bounty-hunter-2026`
