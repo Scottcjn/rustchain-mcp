@@ -1,7 +1,7 @@
 """
 Mock Beacon Atlas service for testing.
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import json
 
 

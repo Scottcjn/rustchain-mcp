@@ -1,12 +1,10 @@
 """
 Unit tests for evangelist agent actions and workflows.
 """
-import pytest
-from unittest.mock import Mock, patch, call
+from unittest.mock import Mock, patch
 import evangelist_agent
 from tests.mocks.mock_beacon import MockBeaconService, setup_beacon_mocks
 from tests.mocks.mock_bottube import MockBoTTubeService, setup_bottube_mocks
-from tests.mocks.mock_moltbook import MockMoltbookService, setup_moltbook_mocks, mock_moltbook_key_env
 
 
 class TestGenerateOnboardingPost:
@@ -335,14 +333,12 @@ class TestRunOnce:
         post_calls = []
         
         # Mock beacon_ping_agent
-        original_ping = evangelist_agent.beacon_ping_agent
         def mock_ping(agent_id, message, dry_run=False):
             ping_calls.append((agent_id, dry_run))
             return True
         monkeypatch.setattr(evangelist_agent, "beacon_ping_agent", mock_ping)
         
         # Mock post_to_moltbook
-        original_post = evangelist_agent.post_to_moltbook
         def mock_post(title, content, submolt, dry_run=False):
             post_calls.append((title, submolt, dry_run))
             return True
@@ -359,7 +355,7 @@ class TestRunOnce:
         
         # Should create one post
         assert len(post_calls) == 1
-        assert post_calls[0][2] == True  # dry_run=True
+        assert post_calls[0][2]  # dry_run=True
     
     def test_normal_run_with_agents(self, monkeypatch):
         """Test normal run with discovered agents."""

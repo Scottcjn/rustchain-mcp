@@ -1,7 +1,6 @@
 """
 Unit tests for agent discovery functions.
 """
-import pytest
 from unittest.mock import Mock, patch
 import evangelist_agent
 from tests.mocks.mock_beacon import MockBeaconService, setup_beacon_mocks
@@ -202,7 +201,7 @@ class TestDiscoverAgentsFromA2A:
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
         # Function returns None, we just test it doesn't crash
-        result = evangelist_agent.discover_agents_from_a2a()
+        evangelist_agent.discover_agents_from_a2a()
         
         # Verify both URLs were called
         assert mock_client.get.call_count == 2
@@ -222,7 +221,7 @@ class TestDiscoverAgentsFromA2A:
         ]
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
-        result = evangelist_agent.discover_agents_from_a2a()
+        evangelist_agent.discover_agents_from_a2a()
         
         # Should still complete without error
         assert mock_client.get.call_count == 2
@@ -238,7 +237,7 @@ class TestDiscoverAgentsFromA2A:
         ]
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
-        result = evangelist_agent.discover_agents_from_a2a()
+        evangelist_agent.discover_agents_from_a2a()
         
         # Should still complete without error
         assert mock_client.get.call_count == 2
@@ -254,7 +253,7 @@ class TestDiscoverAgentsFromA2A:
         ]
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
-        result = evangelist_agent.discover_agents_from_a2a()
+        evangelist_agent.discover_agents_from_a2a()
         
         # Should still complete without error
         assert mock_client.get.call_count == 2

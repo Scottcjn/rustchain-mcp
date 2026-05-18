@@ -3,7 +3,6 @@ Mock Moltbook service for testing.
 """
 from typing import Dict, Any, List
 import json
-import time
 
 
 class MockMoltbookService:
