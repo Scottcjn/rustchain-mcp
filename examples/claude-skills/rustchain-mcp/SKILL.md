@@ -1,6 +1,6 @@
-# RustChain MCP Skill Example
+# RustChain MCP Skill
 
-This skill enables Claude Code to interact with the RustChain ecosystem to find bounties, manage wallets, and monitor the blockchain.
+This skill enables Claude Code to autonomously hunt for bounties, manage RTC wallets, and monitor the RustChain network.
 
 ## Setup
 
@@ -9,8 +9,8 @@ This skill enables Claude Code to interact with the RustChain ecosystem to find 
    pip install rustchain-mcp
    ```
 
-2. **Configure Claude Desktop/Code**
-   Add the following to your configuration:
+2. **Configure Claude Code**
+   Add the `rustchain` server to your `claude_desktop_config.json`:
    ```json
    {
      "mcpServers": {
@@ -22,24 +22,29 @@ This skill enables Claude Code to interact with the RustChain ecosystem to find 
    }
    ```
 
-## Example Workflows
+## Instructions for the Agent
 
-### 1. Hunting for Bounties
-To find a high-reward bounty in the RustChain ecosystem, the agent should:
-- Use `bounty_search` with `keyword="bug"` or `min_rtc=100`.
-- Analyze the resulting issues to determine feasibility.
-- Use `contributor_lookup` to check if other contributors are already active.
+You are now equipped with the RustChain MCP. Use the following patterns to operate within the ecosystem:
 
-### 2. Wallet & Balance Management
-To manage earnings and check status:
-- Use `wallet_create` to initialize a new agent wallet.
-- Use `wallet_balance` to check the current RTC balance.
-- Use `wallet_list` to see all stored wallets.
+### 🎯 Bounty Hunting (Fast Cash Workflow)
+To find and vet opportunities for RTC:
+1. **Search:** Call `bounty_search(keyword="AI", min_rtc=10)` to find open tasks.
+2. **Vet:** Use `contributor_lookup(wallet_id=...)` to see the activity of other hunters on the same task.
+3. **Execute:** Implement the fix/feature.
+4. **Claim:** Use `wallet_transfer_signed` if required for a bond, or submit your PR as per the issue instructions.
 
-### 3. Network Monitoring
-To check the health of the decentralized infrastructure:
-- Use `network_health` to verify all four attestation nodes are reachable.
-- Use `rustchain_epoch` to track the current reward cycle.
+### 💰 Wallet Operations
+- **Initialization:** Use `wallet_create(agent_name="yoshi_hunter")` to generate a new Ed25519 wallet.
+- **Balance Check:** Use `wallet_balance(wallet_id="yoshi_hunter")` to track your RTC earnings.
+- **Transfers:** Use `wallet_transfer_signed` to send RTC to other agents or partners.
 
-## Wallet for Testing
-For verification purposes, this example was created using the wallet: `yoshi-bounty-hunter-2026`
+### 📡 Network Intel
+- **Health Check:** Use `network_health` to ensure the attestation nodes are online before starting a critical transaction.
+- **Epoch Tracking:** Use `rustchain_epoch` to determine the current reward multiplier and epoch duration.
+- **Miner Audit:** Use `rustchain_miners` to identify high-antiquity miners.
+
+## Example Prompt for Claude Code
+"Using the rustchain MCP, find me a bounty with at least 10 RTC that involves TypeScript, check if anyone else has claimed it using contributor_lookup, and then summarize the requirements for me."
+
+## Verification
+Created by: `yoshi-fast-cash-agent-2026`
