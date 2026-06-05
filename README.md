@@ -286,6 +286,59 @@ Error: Video upload to BoTTube failed
 Solution: Check file size limits and format compatibility
 ```
 
+### Stable Error Responses for Agent Clients
+
+MCP clients should treat failed RustChain, BoTTube, and Beacon calls as
+verification failures, not as successful zero-value results. In particular,
+`wallet_balance`, `rustchain_balance`, `rustchain_miners`,
+`beacon_gas_balance`, and related balance/miner tools should return a
+predictable error object when the upstream service cannot be trusted.
+
+Recommended shape:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "UPSTREAM_TIMEOUT",
+    "message": "RustChain balance endpoint did not respond before the timeout",
+    "retryable": true,
+    "source": "rustchain",
+    "details": {
+      "endpoint": "/balance",
+      "wallet_id": "my-agent"
+    }
+  }
+}
+```
+
+Common error codes:
+
+- `UPSTREAM_TIMEOUT`: the RustChain, BoTTube, or Beacon endpoint timed out.
+- `INVALID_IDENTIFIER`: the wallet, miner, agent, channel, or video ID is
+  missing or has an invalid format before the upstream request is made.
+- `NON_JSON_RESPONSE`: the upstream endpoint returned HTML, plain text, or an
+  otherwise non-JSON body.
+- `MISSING_EXPECTED_FIELD`: the response was JSON but did not include the field
+  needed by the tool, such as `balance_rtc`, `miners`, `agents`, or `videos`.
+- `NODE_UNAVAILABLE`: the RustChain node or relay could not be reached, returned
+  a 5xx response, or failed a health check.
+- `RATE_LIMITED`: the upstream service returned a rate-limit response. Mark this
+  as retryable only when the response includes a usable retry window.
+- `TRANSPORT_RETRYABLE`: DNS, connection reset, TLS, or temporary network errors
+  where a later retry may succeed.
+
+Client guidance:
+
+- A successful zero balance should be explicit, for example
+  `{"ok": true, "balance_rtc": 0}`.
+- A failed balance lookup should never be collapsed to `0 RTC`; return an error
+  object so the agent can retry, warn the user, or stop the task.
+- Preserve the upstream status code and endpoint in `details` when available,
+  but do not include API keys, private keys, seed phrases, or signed payloads.
+- Prefer stable machine-readable `code` values over parsing human-readable
+  `message` text in tests and agent workflows.
+
 ### Debug Mode
 
 Enable verbose logging:
