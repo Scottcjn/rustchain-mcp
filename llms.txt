@@ -1,0 +1,10 @@
+# rustchain-mcp
+
+> Part of the RustChain DePIN ecosystem.
+
+Part of the [RustChain](https://github.com/Scottcjn/RustChain) ecosystem.
+
+## Canonical Links
+
+- **Source:** https://github.com/Scottcjn/rustchain-mcp
+- **RustChain:** https://github.com/Scottcjn/RustChain
