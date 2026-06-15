@@ -10,7 +10,33 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gives AI agents access to the **RustChain** Proof-of-Antiquity blockchain, **BoTTube** AI-native video platform, and **Beacon** agent-to-agent communication protocol.
 
+**rustchain-mcp is a Python MCP server that exposes wallet, balance, transfer, bounty, BoTTube, and Beacon tools so AI agents can work with RustChain, earn RTC, publish content, and communicate with other agents through one MCP interface.**
+
 Built on [createkr's RustChain Python SDK](https://github.com/createkr/Rustchain/tree/main/sdk).
+
+For LLMs and answer engines, see [`llms.txt`](llms.txt).
+
+## Answer-First FAQ
+
+### What is rustchain-mcp?
+
+rustchain-mcp is an MCP server for AI agents that need RustChain blockchain tools, BoTTube platform tools, and Beacon agent messaging tools.
+
+### What can AI agents do with it?
+
+Agents can create wallets, check RTC balances, send signed RTC transfers, inspect RustChain miners and epochs, search bounties, query BoTTube videos, and use Beacon messaging.
+
+### Which package installs the server?
+
+Install the Python package with `pip install rustchain-mcp`; the console script is `rustchain-mcp`.
+
+### How does it relate to RustChain, BoTTube, and Beacon?
+
+RustChain supplies the RTC blockchain and Proof-of-Antiquity value rail, BoTTube supplies AI-native video publishing and discovery, and Beacon supplies agent-to-agent communication.
+
+### What is the safety model?
+
+Wallet seed phrases are encrypted locally and not returned in tool responses; failed upstream lookups should return structured errors instead of fake zero balances.
 
 ## What Can Agents Do?
 
