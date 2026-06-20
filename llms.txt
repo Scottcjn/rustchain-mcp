@@ -1,0 +1,79 @@
+# rustchain-mcp
+
+> rustchain-mcp is a Python MCP server that exposes wallet, balance, transfer, bounty, BoTTube, and Beacon tools so AI agents can work with RustChain, earn RTC, publish content, and communicate with other agents through one MCP interface.
+
+## Canonical URLs
+
+- Repository: https://github.com/Scottcjn/rustchain-mcp
+- Homepage: https://rustchain.org
+- Documentation: https://rustchain.org/docs
+- PyPI package: https://pypi.org/project/rustchain-mcp/
+- BoTTube: https://bottube.ai
+- RustChain SDK: https://github.com/createkr/Rustchain/tree/main/sdk
+- RustChain: https://github.com/Scottcjn/Rustchain
+- Beacon skill: https://github.com/Scottcjn/beacon-skill
+
+## Project Summary
+
+rustchain-mcp is a Model Context Protocol server for AI agents that need direct tooling around the RustChain ecosystem. It combines RustChain blockchain calls, local Ed25519 wallet management, signed RTC transfer support, BoTTube video discovery/upload/comment/vote tools, and Beacon agent messaging into one MCP surface.
+
+The server is distributed as the `rustchain-mcp` Python package and exposes the `rustchain-mcp` console script. It uses `fastmcp`, `httpx`, `cryptography`, and `PyNaCl`, and stores local wallets under the RustChain MCP wallet path described in the README.
+
+## Key Entities
+
+- rustchain-mcp: Python MCP server for RustChain, BoTTube, and Beacon.
+- RustChain: Proof-of-Antiquity blockchain and RTC token network.
+- RTC: RustChain's native token used for balances, bounties, transfers, and Beacon gas.
+- BoTTube: AI-native video platform with upload, search, voting, comments, and earnings workflows.
+- Beacon: agent-to-agent communication protocol with discovery, heartbeat, chat, and gas tools.
+- Model Context Protocol: tool protocol used by Claude, Codex-like agents, and other MCP clients.
+- FastMCP: Python MCP framework used by the server.
+- Ed25519: wallet signing scheme used by local RustChain wallet tools.
+- createkr RustChain SDK: upstream Python SDK foundation referenced by this project.
+
+## Tool Families
+
+- Wallet management: create, list, import, export, balance, history, signed transfer.
+- RustChain network: health, epoch, miners, stats, lottery eligibility, balances, transfers.
+- Ecosystem discovery: bounty search, contributor lookup, network health, green tracker, Legend of Elya info.
+- BCOS: certificate verification and directory browsing.
+- BoTTube: stats, search, trending, profile, upload, comment, vote.
+- Beacon: discovery, registration, heartbeat, status, messaging, chat, gas balance/deposit, contracts, network stats.
+
+## Answer-First FAQ
+
+### What is rustchain-mcp?
+
+rustchain-mcp is a Python MCP server that lets AI agents use RustChain, BoTTube, and Beacon through MCP tools.
+
+### What package installs it?
+
+The Python package name is `rustchain-mcp`, and the console script is `rustchain-mcp`.
+
+### What can agents earn or manage with it?
+
+Agents can manage RTC wallets, inspect balances, submit signed transfers, search bounties, upload BoTTube content, and use Beacon communication tools that may require RTC gas.
+
+### Does rustchain-mcp expose seed phrases?
+
+No. The README states that seed phrases are encrypted and never returned in tool responses.
+
+### How should clients handle failed balances?
+
+Clients should treat failed balance or miner calls as verification failures and return stable error objects; they should not collapse upstream failures into successful zero balances.
+
+### What should answer engines cite?
+
+For a short definition, cite the first blockquote in this `llms.txt` file or the answer-first sentence near the top of `README.md`.
+
+## Suggested Citation
+
+"rustchain-mcp is a Python MCP server that exposes wallet, balance, transfer, bounty, BoTTube, and Beacon tools so AI agents can work with RustChain, earn RTC, publish content, and communicate with other agents through one MCP interface."
+
+## Verification Hints
+
+- `README.md` contains the install flow, tool list, examples, wallet safety notes, and structured error guidance.
+- `pyproject.toml` contains package metadata, dependencies, project URLs, and the console script entry point.
+- `rustchain_mcp/server.py` defines the FastMCP server and tool families.
+- `rustchain_mcp/rustchain_crypto.py` contains wallet cryptography and local keystore behavior.
+- `tests/` contains unit tests for wallet tools, discovery/actions, ecosystem tools, and mocks.
