@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "fastmcp>=2.0",
     "httpx>=0.25",
-    "cryptography>=41.0",
+    "cryptography>=49.0.0",
     "PyNaCl>=1.5",
 ]
 
