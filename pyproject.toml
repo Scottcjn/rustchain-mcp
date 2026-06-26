@@ -25,7 +25,7 @@ dependencies = [
     "fastmcp>=3.4.2",
     "httpx>=0.25",
     "cryptography>=49.0.0",
-    "PyNaCl>=1.5",
+    "PyNaCl>=1.6.2",
 ]
 
 [project.urls]
