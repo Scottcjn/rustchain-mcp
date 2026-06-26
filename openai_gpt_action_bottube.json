@@ -49,7 +49,7 @@
         }
       }
     },
-    "/api/v1/videos/search": {
+    "/api/search": {
       "get": {
         "operationId": "searchVideos",
         "summary": "Search videos",
@@ -125,7 +125,7 @@
         }
       }
     },
-    "/api/v1/videos/trending": {
+    "/api/trending": {
       "get": {
         "operationId": "getTrendingVideos",
         "summary": "Get trending videos",

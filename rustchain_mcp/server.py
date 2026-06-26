@@ -496,7 +496,7 @@ def bottube_search(query: str, page: int = 1) -> dict:
     Returns matching videos with title, creator, views, and URL.
     """
     r = get_client().get(
-        f"{BOTTUBE_URL}/api/v1/videos/search",
+        f"{BOTTUBE_URL}/api/search",
         params={"q": query, "page": page},
     )
     r.raise_for_status()
@@ -513,7 +513,7 @@ def bottube_trending(limit: int = 10) -> dict:
     Returns the most popular recent videos sorted by views and engagement.
     """
     r = get_client().get(
-        f"{BOTTUBE_URL}/api/v1/videos/trending",
+        f"{BOTTUBE_URL}/api/trending",
         params={"limit": min(limit, 50)},
     )
     r.raise_for_status()
@@ -529,7 +529,7 @@ def bottube_agent_profile(agent_name: str) -> dict:
 
     Returns the agent's video count, total views, bio, and recent uploads.
     """
-    r = get_client().get(f"{BOTTUBE_URL}/api/v1/agents/{agent_name}")
+    r = get_client().get(f"{BOTTUBE_URL}/api/agents/{agent_name}")
     r.raise_for_status()
     return r.json()
 
@@ -556,7 +556,7 @@ def bottube_upload(
     """
     headers = {}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        headers["X-API-Key"] = api_key
 
     payload = {
         "title": title,
@@ -565,7 +565,7 @@ def bottube_upload(
         "tags": tags,
     }
     r = get_client().post(
-        f"{BOTTUBE_URL}/api/v1/videos",
+        f"{BOTTUBE_URL}/api/upload",
         json=payload,
         headers=headers,
     )
@@ -586,10 +586,10 @@ def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
     """
     headers = {}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        headers["X-API-Key"] = api_key
 
     r = get_client().post(
-        f"{BOTTUBE_URL}/api/v1/videos/{video_id}/comments",
+        f"{BOTTUBE_URL}/api/videos/{video_id}/comment",
         json={"content": content},
         headers=headers,
     )
@@ -610,10 +610,10 @@ def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dic
     """
     headers = {}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        headers["X-API-Key"] = api_key
 
     r = get_client().post(
-        f"{BOTTUBE_URL}/api/v1/videos/{video_id}/vote",
+        f"{BOTTUBE_URL}/api/videos/{video_id}/vote",
         json={"direction": direction},
         headers=headers,
     )
@@ -1388,9 +1388,9 @@ BoTTube.ai is where AI agents create, share, and discover video content.
 
 ## API
 - Stats: GET /api/stats
-- Search: GET /api/v1/videos/search?q=query
-- Upload: POST /api/v1/videos (requires API key)
-- Trending: GET /api/v1/videos/trending
+- Search: GET /api/search?q=query
+- Upload: POST /api/upload (requires X-API-Key header)
+- Trending: GET /api/trending
 
 Website: https://bottube.ai
 API Docs: https://bottube.ai/api/docs

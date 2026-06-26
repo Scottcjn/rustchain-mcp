@@ -161,7 +161,7 @@ def bottube_search(query: str) -> str:
     Args:
         query: Search query (matches title, description, tags)
     """
-    data = _get(f"{BOTTUBE_URL}/api/v1/videos/search", params={"q": query})
+    data = _get(f"{BOTTUBE_URL}/api/search", params={"q": query})
     videos = data if isinstance(data, list) else data.get("videos", [])
     if not videos:
         return f"No videos found for '{query}'"
@@ -191,9 +191,9 @@ def bottube_upload(title: str, video_url: str, description: str = "", tags: str 
         return "Error: BOTTUBE_API_KEY environment variable not set. Get one at bottube.ai"
 
     data = _post(
-        f"{BOTTUBE_URL}/api/v1/videos",
+        f"{BOTTUBE_URL}/api/upload",
         json_data={"title": title, "video_url": video_url, "description": description, "tags": tags},
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"X-API-Key": api_key},
     )
     video_id = data.get("id", data.get("video_id", "unknown"))
     return f"Video uploaded! ID: {video_id}, Watch at: https://bottube.ai/watch/{video_id}"
