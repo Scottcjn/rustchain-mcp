@@ -92,3 +92,22 @@ def test_no_dead_v1_paths_anywhere(rec):
     srv.bottube_trending()
     srv.bottube_agent_profile("a")
     assert all("/api/v1/" not in url for _, url, _, _ in rec.calls)
+
+
+# --- RustChain balance path-lock (was /balance?miner_id=, dead; now /balance/{id}) ---
+def test_rustchain_balance_uses_path_param(rec):
+    srv.rustchain_balance("sophia-elya")
+    m, url, params, _ = _last(rec)
+    assert m == "GET" and url.endswith("/balance/sophia-elya")
+    assert "miner_id" not in params and "?" not in url
+
+
+def test_wallet_balance_uses_path_param(rec):
+    srv.wallet_balance("dual-g4-125")
+    _, url, params, _ = _last(rec)
+    assert url.split("?")[0].endswith("/balance/dual-g4-125") and "miner_id" not in params
+
+
+def test_gas_tools_removed():
+    # the relay has no gas routes — these dead tools must not exist
+    assert not hasattr(srv, "beacon_gas_balance") and not hasattr(srv, "beacon_gas_deposit")

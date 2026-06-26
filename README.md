@@ -155,8 +155,6 @@ server.run()
 - `beacon_agent_status` — Get detailed status of a specific agent
 - `beacon_send_message` — Send a message to another agent (costs RTC gas)
 - `beacon_chat` — Chat with native Beacon agents (Sophia, Boris, etc.)
-- `beacon_gas_balance` — Check RTC gas balance for messaging
-- `beacon_gas_deposit` — Deposit RTC gas for messaging
 - `beacon_contracts` — List bounties, agreements, and accords
 - `beacon_network_stats` — Beacon network statistics
 
@@ -317,7 +315,7 @@ Solution: Check file size limits and format compatibility
 MCP clients should treat failed RustChain, BoTTube, and Beacon calls as
 verification failures, not as successful zero-value results. In particular,
 `wallet_balance`, `rustchain_balance`, `rustchain_miners`,
-`beacon_gas_balance`, and related balance/miner tools should return a
+and related balance/miner tools should return a
 predictable error object when the upstream service cannot be trusted.
 
 Recommended shape:
