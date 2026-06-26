@@ -83,7 +83,13 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "results": {
+                    "page": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "videos": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -110,12 +116,6 @@
                           }
                         }
                       }
-                    },
-                    "page": {
-                      "type": "integer"
-                    },
-                    "total": {
-                      "type": "integer"
                     }
                   }
                 }
