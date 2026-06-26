@@ -168,8 +168,7 @@ def rustchain_balance(wallet_id: str) -> dict:
     """
     # Bypass any potential local caching by forcing a fresh network request
     # and adding a timestamp to the query if the server supports it.
-    params = {"miner_id": wallet_id, "timestamp": int(time.time() * 1000)}
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params=params)
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}", params={"_ts": int(time.time() * 1000)})
     r.raise_for_status()
     return r.json()
 
@@ -220,7 +219,7 @@ def wallet_balance(wallet_id: str) -> dict:
         # Try querying by address directly
         pass
     
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}")
     r.raise_for_status()
     return r.json()
 
@@ -777,9 +776,6 @@ def beacon_send_message(
 ) -> dict:
     """Send a message to another agent via Beacon relay.
 
-    Costs RTC gas (0.0001 RTC per text message). Check your gas
-    balance with beacon_gas_balance first.
-
     Args:
         relay_token: Your relay token (from beacon_register)
         from_agent: Your agent ID
@@ -825,56 +821,6 @@ def beacon_chat(agent_id: str, message: str) -> dict:
     r = get_client().post(
         f"{BEACON_URL}/api/chat",
         json={"agent_id": agent_id, "message": message},
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-@mcp.tool()
-def beacon_gas_balance(agent_id: str) -> dict:
-    """Check RTC gas balance for Beacon messaging.
-
-    Sending messages through Beacon costs micro-fees in RTC:
-    - Text relay: 0.0001 RTC
-    - Attachment: 0.001 RTC
-    - Discovery: 0.00005 RTC
-
-    Args:
-        agent_id: Your agent ID to check gas balance for
-
-    Returns current gas balance in RTC.
-    """
-    r = get_client().get(f"{BEACON_URL}/relay/gas/balance/{agent_id}")
-    r.raise_for_status()
-    return r.json()
-
-
-@mcp.tool()
-def beacon_gas_deposit(
-    agent_id: str,
-    amount_rtc: float,
-    admin_key: str = "",
-) -> dict:
-    """Deposit RTC gas for Beacon messaging.
-
-    Gas powers agent-to-agent communication. Deposit RTC to your
-    agent's gas balance to send messages through the relay.
-
-    Args:
-        agent_id: Agent ID to deposit gas for
-        amount_rtc: Amount of RTC to deposit
-        admin_key: Authorization key for deposit
-
-    Returns updated gas balance.
-    """
-    headers = {}
-    if admin_key:
-        headers["X-Admin-Key"] = admin_key
-
-    r = get_client().post(
-        f"{BEACON_URL}/relay/gas/deposit",
-        json={"agent_id": agent_id, "amount_rtc": amount_rtc},
-        headers=headers,
     )
     r.raise_for_status()
     return r.json()
@@ -1168,10 +1114,7 @@ def contributor_lookup(username: str) -> dict:
     wallet_ids_to_try = [username, f"rtc-{username}", username.lower()]
     for wallet_id in wallet_ids_to_try:
         try:
-            r = client.get(
-                f"{RUSTCHAIN_NODE}/balance",
-                params={"miner_id": wallet_id},
-            )
+            r = client.get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}")
             if r.status_code == 200:
                 balance_data = r.json()
                 if balance_data.get("balance_rtc", 0) > 0 or balance_data.get("amount_i64", 0) > 0:
