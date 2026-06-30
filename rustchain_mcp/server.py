@@ -22,6 +22,7 @@ Credits:
 License: MIT
 """
 
+import json
 import os
 import time
 
@@ -278,11 +279,25 @@ def wallet_transfer_signed(
             "hint": "Use wallet_list to see available wallets",
         }
     
-    # Sign the transfer message
-    transfer_message = f"{wallet['address']}:{to_address}:{amount_rtc}:{memo}:{int(time.time() * 1000)}".encode()
+    # Sign the transfer using the network's CANONICAL format: compact, sorted-key
+    # JSON of {from,to,amount,fee,memo,nonce}, matching the official
+    # rustchain_sdk.Wallet.sign_transfer(). The previous colon-delimited string
+    # signed a different message than the node verifies — AND a *second*, separate
+    # nonce was generated at submit time — so every signed transfer was rejected.
+    nonce = int(time.time() * 1000)
+    fee_rtc = 0.0
+    tx_data = {
+        "from": wallet["address"],
+        "to": to_address,
+        "amount": float(amount_rtc),
+        "fee": float(fee_rtc),
+        "memo": memo,
+        "nonce": str(nonce),
+    }
+    transfer_message = json.dumps(tx_data, sort_keys=True, separators=(",", ":")).encode()
     signature = rustchain_crypto.sign_message(transfer_message, wallet["private_key"])
     
-    # Submit signed transfer to network
+    # Submit signed transfer to network — passing the SAME nonce/fee that were signed
     result = rustchain_transfer_signed(
         from_address=wallet["address"],
         to_address=to_address,
@@ -290,6 +305,8 @@ def wallet_transfer_signed(
         signature=signature,
         public_key=wallet["public_key"],
         memo=memo,
+        nonce=nonce,
+        fee_rtc=fee_rtc,
     )
     
     return {
@@ -436,6 +453,8 @@ def rustchain_transfer_signed(
     signature: str,
     public_key: str,
     memo: str = "",
+    nonce: int = None,
+    fee_rtc: float = 0.0,
 ) -> dict:
     """Transfer RTC tokens between wallets (requires Ed25519 signature).
 
@@ -451,12 +470,22 @@ def rustchain_transfer_signed(
     Transfers require valid Ed25519 signatures for security.
     """
     import time
+    if nonce is None:
+        nonce = int(time.time() * 1000)
+    # Send both canonical ({from,to,amount,fee}) and legacy ({from_address,...})
+    # field names so the node can reconstruct the exact signed message regardless
+    # of which it reads. nonce/fee MUST match what the caller signed.
     payload = {
+        "from": from_address,
+        "to": to_address,
+        "amount": float(amount_rtc),
+        "fee": float(fee_rtc),
         "from_address": from_address,
         "to_address": to_address,
         "amount_rtc": amount_rtc,
+        "fee_rtc": float(fee_rtc),
         "memo": memo,
-        "nonce": int(time.time() * 1000),
+        "nonce": nonce,
         "signature": signature,
         "public_key": public_key,
     }
