@@ -1,0 +1,18 @@
+{
+  "mcp": {
+    "icons": [
+      {
+        "src": "https://rustchain.org/images/logo.png",
+        "type": "image/png"
+      }
+    ],
+    "description": "RustChain + BoTTube MCP Server: blockchain, video platform, and agent messaging tools",
+    "server": {
+      "name": "rustchain-mcp",
+      "description": "MCP server for RustChain blockchain, BoTTube video, and Beacon messaging.",
+      "homepageURL": "https://rustchain.org",
+      "repositoryURL": "https://github.com/Scottcjn/rustchain-mcp",
+      "license": "MIT"
+    }
+  }
+}
