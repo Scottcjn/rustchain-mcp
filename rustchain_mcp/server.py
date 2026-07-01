@@ -279,25 +279,30 @@ def wallet_transfer_signed(
             "hint": "Use wallet_list to see available wallets",
         }
     
-    # Sign the transfer using the network's CANONICAL format: compact, sorted-key
-    # JSON of {from,to,amount,fee,memo,nonce}, matching the official
-    # rustchain_sdk.Wallet.sign_transfer(). The previous colon-delimited string
-    # signed a different message than the node verifies — AND a *second*, separate
-    # nonce was generated at submit time — so every signed transfer was rejected.
+    # Sign EXACTLY the message the node reconstructs and verifies at
+    # POST /wallet/transfer/signed (createkr/Rustchain node handler):
+    #
+    #     tx_data = {"from","to","amount","memo","nonce"}   (+ "chain_id" iff sent)
+    #     message = json.dumps(tx_data, sort_keys=True, separators=(",", ":"))
+    #
+    # Critical: the node's signed message has NO `fee` key, and `nonce` is a
+    # STRING (the node does str(nonce) before signing). The prior merged fix
+    # included `"fee": 0.0` in the signed JSON, which the node never signs — so
+    # the sorted-key bytes differed by the `"fee":0.0,` segment and every
+    # signature still failed verification. `amount` is the RTC value as a float,
+    # matching the node's _safe_float(amount_rtc).
     nonce = int(time.time() * 1000)
-    fee_rtc = 0.0
     tx_data = {
         "from": wallet["address"],
         "to": to_address,
         "amount": float(amount_rtc),
-        "fee": float(fee_rtc),
         "memo": memo,
         "nonce": str(nonce),
     }
     transfer_message = json.dumps(tx_data, sort_keys=True, separators=(",", ":")).encode()
     signature = rustchain_crypto.sign_message(transfer_message, wallet["private_key"])
-    
-    # Submit signed transfer to network — passing the SAME nonce/fee that were signed
+
+    # Submit signed transfer to network — passing the SAME nonce that was signed
     result = rustchain_transfer_signed(
         from_address=wallet["address"],
         to_address=to_address,
@@ -306,7 +311,6 @@ def wallet_transfer_signed(
         public_key=wallet["public_key"],
         memo=memo,
         nonce=nonce,
-        fee_rtc=fee_rtc,
     )
     
     return {
@@ -454,7 +458,6 @@ def rustchain_transfer_signed(
     public_key: str,
     memo: str = "",
     nonce: int = None,
-    fee_rtc: float = 0.0,
 ) -> dict:
     """Transfer RTC tokens between wallets (requires Ed25519 signature).
 
@@ -472,18 +475,18 @@ def rustchain_transfer_signed(
     import time
     if nonce is None:
         nonce = int(time.time() * 1000)
-    # Send both canonical ({from,to,amount,fee}) and legacy ({from_address,...})
-    # field names so the node can reconstruct the exact signed message regardless
-    # of which it reads. nonce/fee MUST match what the caller signed.
+    # Send exactly the fields the node's /wallet/transfer/signed handler reads
+    # (from_address, to_address, amount_rtc, nonce, signature, public_key, memo).
+    # `amount_rtc` is float()-normalized so it serializes identically to the
+    # `amount` the client signed. The node ignores fee on this endpoint (its
+    # signed message has no fee), so no fee field is sent. The earlier
+    # dual-field payload (canonical `from`/`to`/`amount` alongside legacy names)
+    # was redundant — the node only reads the legacy names — and the extra `fee`
+    # fields were dead weight.
     payload = {
-        "from": from_address,
-        "to": to_address,
-        "amount": float(amount_rtc),
-        "fee": float(fee_rtc),
         "from_address": from_address,
         "to_address": to_address,
-        "amount_rtc": amount_rtc,
-        "fee_rtc": float(fee_rtc),
+        "amount_rtc": float(amount_rtc),
         "memo": memo,
         "nonce": nonce,
         "signature": signature,
