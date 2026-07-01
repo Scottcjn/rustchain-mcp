@@ -71,8 +71,17 @@ def rustchain_balance(wallet_id: str) -> str:
     Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
     """
     data = _get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
-    balance = data.get("balance", data.get("amount", 0))
-    return f"Wallet {wallet_id}: {balance} RTC (${float(balance) * 0.10:.2f} USD reference)"
+    raw = data.get("balance")
+    if raw is None:
+        raw = data.get("amount", 0)
+    # The node may return a null/absent/non-numeric balance (e.g. for an unknown
+    # or empty wallet). Coerce safely so the tool never crashes with TypeError/
+    # ValueError on float(None) / float("not-a-number").
+    try:
+        balance = float(raw)
+    except (TypeError, ValueError):
+        return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
+    return f"Wallet {wallet_id}: {balance:g} RTC (${balance * 0.10:.2f} USD reference)"
 
 
 @tool
