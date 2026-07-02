@@ -94,11 +94,19 @@ Add to your Claude config file (`~/Library/Application Support/Claude/claude_des
 
 ### For Other MCP Clients
 
-```python
-from rustchain_mcp import RustChainMCPServer
+The package exposes the MCP server entrypoint via `rustchain_mcp.server`.
+Configure the node URLs with environment variables, then import and run `mcp`:
 
-server = RustChainMCPServer(api_key="your-api-key")
-server.run()
+```python
+import os
+
+os.environ["RUSTCHAIN_NODE"] = "https://50.28.86.131"
+os.environ["BOTTUBE_URL"] = "https://bottube.ai"
+os.environ["BEACON_URL"] = "https://rustchain.org/beacon"
+
+from rustchain_mcp.server import mcp
+
+mcp.run()
 ```
 
 ## Prerequisites
