@@ -216,11 +216,9 @@ def wallet_balance(wallet_id: str) -> dict:
     """
     # First check if wallet exists in local keystore
     wallet = rustchain_crypto.load_wallet(wallet_id)
-    if wallet is None:
-        # Try querying by address directly
-        pass
-    
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}")
+    address = wallet["address"] if wallet else wallet_id
+
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{address}")
     r.raise_for_status()
     return r.json()
 
