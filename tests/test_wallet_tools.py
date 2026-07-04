@@ -636,7 +636,7 @@ class TestMCPServerWalletTools:
         """Test wallet_balance MCP tool with mocked HTTP response."""
         from rustchain_mcp.server import wallet_create, wallet_balance
 
-        wallet_create(agent_name="balance-agent", password="")
+        created = wallet_create(agent_name="balance-agent", password="")
 
         mock_response = mock.Mock()
         mock_response.json.return_value = {"balance": 42.0, "wallet_id": "balance-agent"}
@@ -651,6 +651,31 @@ class TestMCPServerWalletTools:
 
         assert isinstance(result, dict)
         assert result.get("balance") == 42.0
+        mock_client.get.assert_called_once_with(
+            f"https://50.28.86.131/balance/{created['address']}"
+        )
+
+    def test_mcp_wallet_balance_accepts_direct_address(self, temp_keystore):
+        """Test wallet_balance still accepts a direct RTC address."""
+        from rustchain_mcp.server import wallet_balance
+
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {
+            "balance": 12.5,
+            "wallet_id": "RTCdirect123",
+        }
+        mock_response.raise_for_status = mock.Mock()
+
+        with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
+            mock_client = mock.Mock()
+            mock_client.get.return_value = mock_response
+            mock_client_fn.return_value = mock_client
+
+            result = wallet_balance(wallet_id="RTCdirect123")
+
+        assert isinstance(result, dict)
+        assert result.get("balance") == 12.5
+        mock_client.get.assert_called_once_with("https://50.28.86.131/balance/RTCdirect123")
 
     def test_mcp_wallet_history_with_mock(self, temp_keystore):
         """Test wallet_history MCP tool with mocked HTTP response."""
