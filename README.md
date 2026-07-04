@@ -94,11 +94,16 @@ Add to your Claude config file (`~/Library/Application Support/Claude/claude_des
 
 ### For Other MCP Clients
 
-```python
-from rustchain_mcp import RustChainMCPServer
+Any MCP-compatible client can launch the `rustchain-mcp` console script directly
+(same as the Claude Desktop config above). To embed or run the server
+programmatically, import the FastMCP server instance and run it:
 
-server = RustChainMCPServer(api_key="your-api-key")
-server.run()
+```python
+from rustchain_mcp import mcp
+
+# Configuration is read from environment variables (all optional):
+#   RUSTCHAIN_NODE, BOTTUBE_URL, BEACON_URL, RUSTCHAIN_TIMEOUT
+mcp.run()  # serves over stdio by default
 ```
 
 ## Prerequisites
