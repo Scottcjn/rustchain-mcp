@@ -17,7 +17,7 @@ Usage with CrewAI:
 
 import os
 import requests
-from typing import Type, Optional
+from typing import Type
 from pydantic import BaseModel, Field
 
 try:

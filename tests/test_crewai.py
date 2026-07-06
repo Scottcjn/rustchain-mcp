@@ -2,8 +2,7 @@
 Tests for RustChain CrewAI Tools
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from rustchain_crewai import (
     RustChainCheckBalance,
     RustChainListBounties,
