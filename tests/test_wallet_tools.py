@@ -639,7 +639,7 @@ class TestMCPServerWalletTools:
         created = wallet_create(agent_name="balance-agent", password="")
 
         mock_response = mock.Mock()
-        mock_response.json.return_value = {"balance": 42.0, "wallet_id": "balance-agent"}
+        mock_response.json.return_value = {"amount_rtc": 42.0, "miner_id": "balance-agent"}
         mock_response.raise_for_status = mock.Mock()
 
         with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
@@ -650,9 +650,10 @@ class TestMCPServerWalletTools:
             result = wallet_balance(wallet_id="balance-agent")
 
         assert isinstance(result, dict)
-        assert result.get("balance") == 42.0
+        assert result.get("amount_rtc") == 42.0
         mock_client.get.assert_called_once_with(
-            f"https://50.28.86.131/balance/{created['address']}"
+            "https://50.28.86.131/wallet/balance",
+            params={"miner_id": created["address"]},
         )
 
     def test_mcp_wallet_balance_accepts_direct_address(self, temp_keystore):
@@ -661,8 +662,8 @@ class TestMCPServerWalletTools:
 
         mock_response = mock.Mock()
         mock_response.json.return_value = {
-            "balance": 12.5,
-            "wallet_id": "RTCdirect123",
+            "amount_rtc": 12.5,
+            "miner_id": "RTCdirect123",
         }
         mock_response.raise_for_status = mock.Mock()
 
@@ -674,8 +675,11 @@ class TestMCPServerWalletTools:
             result = wallet_balance(wallet_id="RTCdirect123")
 
         assert isinstance(result, dict)
-        assert result.get("balance") == 12.5
-        mock_client.get.assert_called_once_with("https://50.28.86.131/balance/RTCdirect123")
+        assert result.get("amount_rtc") == 12.5
+        mock_client.get.assert_called_once_with(
+            "https://50.28.86.131/wallet/balance",
+            params={"miner_id": "RTCdirect123"},
+        )
 
     def test_mcp_wallet_history_with_mock(self, temp_keystore):
         """Test wallet_history MCP tool with mocked HTTP response."""
