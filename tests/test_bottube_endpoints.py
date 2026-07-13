@@ -116,6 +116,10 @@ def test_balance_requires_amount_rtc_from_canonical_response(monkeypatch):
     result = srv.rustchain_balance("miner-a")
 
     assert result["amount_rtc"] == 12.5
+    assert result["balance"] == 12.5
+    assert result["balance_rtc"] == 12.5
+    assert result["miner_id"] == "miner-a"
+    assert result["wallet_id"] == "miner-a"
     assert _last(recorder)[2] == {"miner_id": "miner-a"}
 
 
@@ -127,6 +131,37 @@ def test_balance_does_not_turn_missing_amount_into_zero(monkeypatch):
 
     assert result["ok"] is False
     assert result["error"]["code"] == "MISSING_EXPECTED_FIELD"
+
+
+def test_rustchain_miners_requests_bounded_page_and_preserves_node_total(monkeypatch):
+    recorder = _Recorder(
+        {
+            "miners": [{"miner_id": "a"}, {"miner_id": "b"}],
+            "pagination": {"limit": 20, "offset": 0, "total": 91},
+        }
+    )
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_miners()
+
+    method, url, params, _ = _last(recorder)
+    assert method == "GET" and url.endswith("/api/miners")
+    assert params == {"limit": 20, "offset": 0}
+    assert result["page_count"] == 2
+    assert result["total_miners"] == 91
+    assert result["total_known"] is True
+    assert result["pagination"]["total"] == 91
+
+
+def test_rustchain_miners_does_not_infer_global_total_from_page(monkeypatch):
+    recorder = _Recorder({"miners": [{"miner_id": "only-page-item"}]})
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_miners()
+
+    assert result["page_count"] == 1
+    assert result["total_known"] is False
+    assert "total_miners" not in result
 
 
 def test_gas_tools_removed():

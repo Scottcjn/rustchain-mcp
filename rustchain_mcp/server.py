@@ -24,6 +24,7 @@ License: MIT
 
 import atexit
 import json
+import logging
 import os
 import threading
 import time
@@ -32,7 +33,10 @@ import httpx
 from fastmcp import FastMCP
 
 from . import rustchain_crypto
-from .events import EventRelay, EventRelayConfig, RelayInputError
+from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_total
+
+
+LOGGER = logging.getLogger("rustchain_mcp.server")
 
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
@@ -88,8 +92,8 @@ def get_event_relay() -> EventRelay:
 
 def _shutdown_event_relay() -> None:
     relay = _event_relay
-    if relay is not None:
-        relay.stop()
+    if relay is not None and not relay.stop():
+        LOGGER.warning("RustChain event relay did not stop before shutdown timeout")
 
 
 atexit.register(_shutdown_event_relay)
@@ -178,6 +182,12 @@ def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) ->
                 "details": {"endpoint": "/wallet/balance", "miner_id": miner_id},
             },
         }
+    amount_rtc = data["amount_rtc"]
+    canonical_miner_id = data.get("miner_id") or miner_id
+    data["miner_id"] = canonical_miner_id
+    data["wallet_id"] = data.get("wallet_id") or canonical_miner_id
+    data["balance"] = amount_rtc
+    data["balance_rtc"] = amount_rtc
     return data
 
 
@@ -220,30 +230,49 @@ def rustchain_epoch() -> dict:
 
 @mcp.tool()
 def rustchain_miners() -> dict:
-    """List all active RustChain miners with hardware details.
+    """List a bounded first page of active RustChain miners.
 
-    Returns each miner's wallet address, hardware type (G4, G5,
+    Returns each page miner's wallet address, hardware type (G4, G5,
     POWER8, Apple Silicon, modern x86_64), antiquity multiplier,
     and last attestation time. Vintage hardware earns higher
-    multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x).
+    multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x). total_miners
+    is included only when supplied by node pagination metadata.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/api/miners")
+    page_limit = 20
+    r = get_client().get(
+        f"{RUSTCHAIN_NODE}/api/miners",
+        params={"limit": page_limit, "offset": 0},
+    )
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError:
         return {"error": _handle_api_error(r), "status": "error"}
     data = r.json()
     miners = data if isinstance(data, list) else data.get("miners", [])
-    return {
-        "total_miners": len(miners),
-        "miners": miners[:20],  # Limit to avoid token overflow
-        "note": f"Showing first 20 of {len(miners)} miners" if len(miners) > 20 else None,
+    page = miners[:page_limit]
+    total = pagination_total(data) if isinstance(data, dict) else None
+    result = {
+        "miners": page,
+        "page_count": len(page),
+        "page_limit": page_limit,
+        "page_offset": 0,
+        "total_known": total is not None,
     }
+    if total is not None:
+        result["total_miners"] = total
+    if isinstance(data, dict) and isinstance(data.get("pagination"), dict):
+        result["pagination"] = data["pagination"]
+    result["note"] = (
+        f"Showing {len(page)} of {total} miners"
+        if total is not None and total > len(page)
+        else None
+    )
+    return result
 
 
 @mcp.tool()
 def rustchain_events(
-    after_cursor: int = 0,
+    after_cursor: str | int = "0",
     limit: int = 50,
     wait_seconds: float = 0.0,
 ) -> dict:
@@ -256,16 +285,23 @@ def rustchain_events(
     RUSTCHAIN_EVENT_LONG_POLL_MAX (30 seconds by default).
 
     Args:
-        after_cursor: Return events newer than this process-local cursor.
-        limit: Maximum events to return (default 50, configured maximum 100).
+        after_cursor: Return events newer than this generation-qualified cursor.
+        limit: Maximum events to return (default 50, clamped to configured max).
         wait_seconds: Seconds to wait when no newer event exists (default 0).
 
-    Returns normalized read-only state changes plus next_cursor, has_more, and
-    cursor_expired. cursor_expired means the requested cursor fell outside the
-    bounded in-memory history and the returned batch starts at the oldest event.
+    Returns normalized read-only state changes plus next_cursor, has_more,
+    cursor_expired, and cursor_reset. cursor_expired means retained history was
+    evicted. cursor_reset means the cursor belongs to an earlier process
+    generation (or is a legacy integer), so retained snapshots are replayed.
     """
     try:
-        batch = get_event_relay().get_batch(after_cursor, limit, wait_seconds)
+        relay = get_event_relay()
+        applied_limit = (
+            min(limit, relay.config.max_batch_size)
+            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+            else limit
+        )
+        batch = relay.get_batch(after_cursor, applied_limit, wait_seconds)
     except RelayInputError as exc:
         return {
             "error": {
@@ -277,6 +313,8 @@ def rustchain_events(
         }
     return {
         "delivery": "bounded_batch_or_long_poll",
+        "limit": applied_limit,
+        "limit_clamped": applied_limit != limit,
         "native_mcp_streaming": False,
         "ok": True,
         **batch,
@@ -311,7 +349,8 @@ def rustchain_balance(wallet_id: str) -> dict:
                    Examples: "dual-g4-125", "sophia-nas-c4130",
                    or an RTC address like "RTCa1b2c3d4..."
 
-    Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
+    Returns canonical amount_rtc/miner_id plus compatibility aliases balance,
+    balance_rtc, and wallet_id. 1 RTC = $0.10 USD reference rate.
     """
     return _get_rustchain_balance(wallet_id)
 

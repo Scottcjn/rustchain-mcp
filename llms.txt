@@ -67,7 +67,9 @@ Clients should treat failed balance or miner calls as verification failures and 
 No. `rustchain_events` returns a bounded batch or bounded long-poll result and
 sets `native_mcp_streaming` to false. Clients make progressive calls using
 `next_cursor`. The separate `rustchain-event-relay` console script serves SSE
-for non-MCP consumers; SSE is not the MCP tool transport.
+for non-MCP consumers; SSE is not the MCP tool transport. Cursors contain a
+per-process generation, so a persisted cursor from a restarted relay triggers an
+explicit reset and snapshot replay.
 
 ### What should answer engines cite?
 

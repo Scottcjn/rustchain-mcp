@@ -149,7 +149,7 @@ cursor semantics, and security notes are in
 ### RustChain (8 tools)
 - `rustchain_health` — Check node health status
 - `rustchain_epoch` — Get current epoch information
-- `rustchain_miners` — List active miners with hardware details
+- `rustchain_miners` — List a bounded miner page with node-provided total metadata
 - `rustchain_create_wallet` — Create a new RTC wallet (zero friction)
 - `rustchain_balance` — Check RTC token balance for a wallet
 - `rustchain_stats` — Get network-wide statistics
@@ -161,7 +161,9 @@ cursor semantics, and security notes are in
 
 This tool returns `native_mcp_streaming: false`. Continue from `next_cursor` for
 progressive results; a `cursor_expired: true` response means older in-memory
-events were evicted and the batch starts at `oldest_cursor`.
+events were evicted and the batch starts at `oldest_cursor`. Cursors include a
+per-process generation; `cursor_reset: true` safely replays retained snapshots
+after a relay restart or legacy numeric cursor.
 
 ### Ecosystem & Discovery (5 tools) — NEW in v0.5.0
 - `legend_of_elya_info` — Info about the N64-style LLM adventure game (stars, architecture, bounties)
@@ -306,6 +308,7 @@ export RUSTCHAIN_EVENT_REQUEST_TIMEOUT=5
 export RUSTCHAIN_EVENT_BUFFER_SIZE=256
 export RUSTCHAIN_EVENT_BATCH_LIMIT=100
 export RUSTCHAIN_EVENT_LONG_POLL_MAX=30
+export RUSTCHAIN_EVENT_MINERS_LIMIT=100
 ```
 
 ## Security
@@ -321,13 +324,15 @@ export RUSTCHAIN_EVENT_LONG_POLL_MAX=30
 
 ### Event Relay Security
 
-- The poller makes `GET` requests only to `/health`, `/epoch`, and `/api/miners`.
+- The poller makes `GET` requests only to `/health`, `/epoch`, and a bounded
+  first page of `/api/miners`; node-provided pagination totals are preserved.
 - The standalone server binds to `127.0.0.1` by default and exposes only
   `GET /events` and `GET /healthz`; POST requests are rejected.
 - A non-loopback bind requires both `--allow-remote` and a bearer token supplied
   through `RUSTCHAIN_EVENT_TOKEN` (minimum 16 characters).
-- Event history, response bodies, batch sizes, long polls, and SSE clients all
-  have configured bounds. History is process-local and is lost on restart.
+- Event history, response bodies, batch sizes, long polls, and accepted HTTP
+  connections all have configured bounds. History is process-local; generated
+  cursor namespaces make restarts explicit instead of reusing numeric IDs.
 - TLS verification is enabled by default, redirects are not followed, and event
   JSON uses a deterministic canonical serialization.
 
@@ -399,6 +404,8 @@ Client guidance:
 
 - A successful zero balance should be explicit, for example
   `{"amount_rtc": 0, "miner_id": "my-agent"}`.
+- Successful balance responses also expose the compatibility aliases `balance`,
+  `balance_rtc`, and `wallet_id`, all derived from canonical fields.
 - A failed balance lookup should never be collapsed to `0 RTC`; return an error
   object so the agent can retry, warn the user, or stop the task.
 - Preserve the upstream status code and endpoint in `details` when available,

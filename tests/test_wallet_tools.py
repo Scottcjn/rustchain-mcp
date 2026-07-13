@@ -651,6 +651,9 @@ class TestMCPServerWalletTools:
 
         assert isinstance(result, dict)
         assert result.get("amount_rtc") == 42.0
+        assert result.get("balance") == 42.0
+        assert result.get("balance_rtc") == 42.0
+        assert result.get("wallet_id") == "balance-agent"
         mock_client.get.assert_called_once_with(
             "https://50.28.86.131/wallet/balance",
             params={"miner_id": created["address"]},
@@ -676,6 +679,9 @@ class TestMCPServerWalletTools:
 
         assert isinstance(result, dict)
         assert result.get("amount_rtc") == 12.5
+        assert result.get("balance") == 12.5
+        assert result.get("balance_rtc") == 12.5
+        assert result.get("wallet_id") == "RTCdirect123"
         mock_client.get.assert_called_once_with(
             "https://50.28.86.131/wallet/balance",
             params={"miner_id": "RTCdirect123"},

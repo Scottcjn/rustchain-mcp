@@ -5,13 +5,19 @@ state transitions into cursor-addressable events:
 
 - `GET /health`
 - `GET /epoch`
-- `GET /api/miners`
+- `GET /api/miners?limit=100&offset=0` (limit is configurable)
 
 It never calls a blockchain write endpoint. Initial successful reads produce
 `*.snapshot` events. Later changes produce `*.changed`; failures produce
 `*.unavailable`; the next successful read produces `*.recovered`. Miner lists
 are canonically sorted so an upstream ordering change alone does not create an
 event.
+
+The health snapshot omits monotonic `uptime_s` and `backup_age_hours` counters,
+so ordinary passage of time does not create a change event. Miner snapshots
+include `page_count`, `page_limit`, and `page_offset`. `total_miners` is present
+only when the node supplies a global pagination total; it is never inferred from
+the current page length.
 
 ## Direct Answer for Issue #231
 
@@ -20,7 +26,7 @@ call. This implementation does not claim native MCP tool streaming support.
 Instead, the tool implements MCP-compatible progressive consumption using
 ordinary bounded results:
 
-1. Call `rustchain_events(after_cursor=0, limit=50)`.
+1. Call `rustchain_events(after_cursor="0", limit=50)`.
 2. Process the returned `events` in cursor order.
 3. Call it again with `after_cursor` set to the returned `next_cursor`.
 4. Set `wait_seconds` to a positive value for a bounded long poll when caught up.
@@ -35,8 +41,10 @@ transport and not evidence of native MCP tool streaming.
 
 ## Cursor Contract
 
-Cursors are strictly increasing integers scoped to one relay process. Events are
-held in a fixed-size in-memory ring and are not persisted across restarts.
+Cursors have the form `<generation>:<sequence>`, for example
+`9f42c8d1:17`. Each relay process creates a fresh generation, and sequence
+numbers increase within that generation. Events are held in a fixed-size
+in-memory ring and are not persisted across restarts.
 
 The MCP result includes:
 
@@ -44,17 +52,23 @@ The MCP result includes:
 |-------|---------|
 | `events` | Events after the requested cursor, up to `limit` |
 | `next_cursor` | Cursor to send in the next call |
-| `oldest_cursor` | Oldest cursor still retained, or 0 before the first event |
+| `generation` | Namespace created for this relay process |
+| `oldest_cursor` | Oldest cursor still retained, or `<generation>:0` before the first event |
 | `latest_cursor` | Newest cursor observed by this process |
 | `has_more` | More retained events exist after `next_cursor` |
 | `cursor_expired` | Requested history was evicted; batch starts at the oldest retained event |
+| `cursor_reset` | Cursor belongs to another generation or uses the legacy integer format |
+| `reset_reason` | `generation_changed`, `legacy_cursor`, or null |
 | `timed_out` | No event arrived within the requested long-poll duration |
 | `stopped` | Relay shutdown has been requested |
 | `native_mcp_streaming` | Always `false` |
 
-A cursor greater than `latest_cursor` is rejected. When `cursor_expired` is
-true, the consumer should treat the response as a detectable history gap and
-reconcile current state if it requires lossless processing.
+A same-generation cursor greater than `latest_cursor` is rejected. When
+`cursor_expired` is true, the consumer should treat the response as a detectable
+history gap and reconcile current state if it requires lossless processing.
+When `cursor_reset` is true, retained snapshots are replayed from the beginning
+and `next_cursor` enters the current generation. Numeric cursors from the first
+relay release reset rather than being silently interpreted in a new process.
 
 ## MCP Tool
 
@@ -63,13 +77,15 @@ open the SSE listener.
 
 ```text
 rustchain_events(
-    after_cursor: int = 0,
+    after_cursor: str | int = "0",
     limit: int = 50,
     wait_seconds: float = 0.0,
 )
 ```
 
-The configured maximums are 100 events and 30 seconds by default. Invalid or
+The configured maximums are 100 events and 30 seconds by default. A requested
+MCP limit, including the default of 50, is clamped to a lower configured maximum
+and reported through `limit` and `limit_clamped`. Invalid or same-generation
 future cursors return an `INVALID_EVENT_CURSOR_REQUEST` error object.
 
 ## Standalone SSE
@@ -89,13 +105,15 @@ curl -N http://127.0.0.1:8766/events?cursor=0\&limit=50
 Resume with either `cursor` or the standard `Last-Event-ID` header:
 
 ```bash
-curl -N -H 'Last-Event-ID: 42' http://127.0.0.1:8766/events
+curl -N -H 'Last-Event-ID: 9f42c8d1:42' http://127.0.0.1:8766/events
 ```
 
 SSE records use the cursor as `id`, the normalized type as `event`, and the
 whole canonical event object as `data`. If retained history was missed, the
-server first emits a `rustchain.cursor.expired` control event. Heartbeat comments
-keep idle connections alive. `GET /healthz` reports process-local relay status.
+server first emits `rustchain.cursor.expired`. If `Last-Event-ID` belongs to a
+previous process generation, it first emits `rustchain.cursor.reset` and then
+replays retained snapshots. Heartbeat comments keep idle connections alive.
+`GET /healthz` reports process-local relay status.
 
 The command also accepts `--node-url`, `--host`, `--port`, `--poll-interval`,
 `--request-timeout`, `--buffer-size`, `--max-clients`, `--allow-remote`, and
@@ -116,9 +134,10 @@ The command also accepts `--node-url`, `--host`, `--port`, `--poll-interval`,
 | `RUSTCHAIN_EVENT_BATCH_LIMIT` | `100` | 1 to 1,000 events per result |
 | `RUSTCHAIN_EVENT_LONG_POLL_MAX` | `30` | 0 to 120 seconds |
 | `RUSTCHAIN_EVENT_RESPONSE_BYTES` | `131072` | Maximum bytes accepted from one source response |
+| `RUSTCHAIN_EVENT_MINERS_LIMIT` | `100` | First-page miner request limit, 1 to 1,000 |
 | `RUSTCHAIN_EVENT_SSE_HOST` | `127.0.0.1` | Listener address |
 | `RUSTCHAIN_EVENT_SSE_PORT` | `8766` | Listener port |
-| `RUSTCHAIN_EVENT_SSE_MAX_CLIENTS` | `16` | Concurrent SSE connection ceiling |
+| `RUSTCHAIN_EVENT_SSE_MAX_CLIENTS` | `16` | All accepted HTTP connections, bounded before worker creation |
 | `RUSTCHAIN_EVENT_SSE_HEARTBEAT` | `15` | Idle heartbeat interval |
 | `RUSTCHAIN_EVENT_SSE_WRITE_TIMEOUT` | `30` | Slow-client write timeout |
 | `RUSTCHAIN_EVENT_ALLOW_REMOTE` | `false` | Explicit non-loopback opt-in |
@@ -142,11 +161,14 @@ the cycle backoff; all three fixed sources are still attempted on every cycle.
   not accepted.
 - `/events` can reveal miner and node state. Put remote deployments behind an
   authenticated TLS reverse proxy even when relay bearer authentication is on.
-- Memory, source response size, MCP batch size, long-poll duration, concurrent
-  SSE clients, and slow-client writes are bounded. The default retained payload
+- Memory, source response size, MCP batch size, long-poll duration, accepted
+  HTTP connections, and slow-client writes are bounded. Admission happens
+  before a worker thread parses authentication, `/healthz`, or SSE requests.
+  The default retained payload
   ceiling is approximately 32 MiB before Python object overhead.
 - SIGINT and SIGTERM stop polling, wake blocked long polls, close the listener,
-  and close the relay-owned HTTP client.
+  and close the relay-owned HTTP client. A failed poller join produces a nonzero
+  standalone process exit instead of being reported as a clean shutdown.
 
 ## Balance Endpoint
 
@@ -156,5 +178,7 @@ The MCP balance tools use the canonical read-only endpoint:
 GET /wallet/balance?miner_id=MINER_OR_WALLET_ID
 ```
 
-Successful responses preserve the node's `amount_rtc` field. Missing
-`amount_rtc` is a verification error and is not converted into a zero balance.
+Successful responses preserve the canonical `amount_rtc` and `miner_id` fields.
+For compatibility, they also include `balance`, `balance_rtc`, and `wallet_id`
+aliases derived from those canonical values. Missing `amount_rtc` is a
+verification error and is not converted into a zero balance.

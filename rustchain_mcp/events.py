@@ -12,6 +12,7 @@ import os
 import signal
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -30,6 +31,7 @@ _SOURCE_PATHS = (
     ("epoch", "/epoch"),
     ("miners", "/api/miners"),
 )
+_VOLATILE_HEALTH_FIELDS = frozenset(("backup_age_hours", "uptime_s"))
 
 
 class RelayInputError(ValueError):
@@ -93,6 +95,7 @@ class EventRelayConfig:
     max_batch_size: int = 100
     max_wait_seconds: float = 30.0
     max_response_bytes: int = 131_072
+    miners_limit: int = 100
 
     @classmethod
     def from_env(cls) -> "EventRelayConfig":
@@ -116,6 +119,7 @@ class EventRelayConfig:
             max_response_bytes=_env_int(
                 "RUSTCHAIN_EVENT_RESPONSE_BYTES", cls.max_response_bytes
             ),
+            miners_limit=_env_int("RUSTCHAIN_EVENT_MINERS_LIMIT", cls.miners_limit),
         )
         return config.validated()
 
@@ -145,6 +149,8 @@ class EventRelayConfig:
             raise RelayInputError(
                 "max_response_bytes must be between 1024 and 10485760"
             )
+        if not 1 <= self.miners_limit <= 1000:
+            raise RelayInputError("miners_limit must be between 1 and 1000")
         return replace(self, node_url=node_url)
 
 
@@ -239,11 +245,43 @@ def _error_data(
     return {"ok": False, "error": error}
 
 
-def _normalize_source(source: str, payload: Any) -> Any:
+def pagination_total(payload: Mapping[str, Any]) -> int | None:
+    candidates = (
+        payload.get("total_miners"),
+        payload.get("total"),
+        payload.get("total_count"),
+    )
+    pagination = payload.get("pagination")
+    if isinstance(pagination, Mapping):
+        candidates += (
+            pagination.get("total_miners"),
+            pagination.get("total"),
+            pagination.get("total_count"),
+        )
+    for candidate in candidates:
+        if (
+            isinstance(candidate, int)
+            and not isinstance(candidate, bool)
+            and candidate >= 0
+        ):
+            return candidate
+    return None
+
+
+def _normalize_source(
+    source: str,
+    payload: Any,
+    *,
+    miners_limit: int | None = None,
+) -> Any:
     if source in ("health", "epoch"):
         if not isinstance(payload, Mapping):
             raise _PollFailure(_error_data("MISSING_EXPECTED_OBJECT", retryable=False))
-        return _normalize_json(payload)
+        normalized_source = _normalize_json(payload)
+        if source == "health":
+            for field in _VOLATILE_HEALTH_FIELDS:
+                normalized_source.pop(field, None)
+        return normalized_source
 
     if isinstance(payload, list):
         miners = payload
@@ -259,13 +297,22 @@ def _normalize_source(source: str, payload: Any) -> Any:
     normalized_miners = [_normalize_json(miner) for miner in miners]
     normalized_miners.sort(key=canonical_json)
     normalized["miners"] = normalized_miners
-    normalized["total_miners"] = len(normalized_miners)
+    total_miners = pagination_total(payload) if isinstance(payload, Mapping) else None
+    normalized["page_count"] = len(normalized_miners)
+    normalized["page_limit"] = miners_limit
+    normalized["page_offset"] = 0
+    normalized["total_known"] = total_miners is not None
+    if total_miners is not None:
+        normalized["total_miners"] = total_miners
+    else:
+        normalized.pop("total_miners", None)
     return _normalize_json(normalized)
 
 
 @dataclass(frozen=True)
 class RelayEvent:
-    cursor: int
+    sequence: int
+    cursor: str
     event_type: str
     source: str
     serialized: str
@@ -280,6 +327,13 @@ class _SourceState:
     canonical_data: str
 
 
+@dataclass(frozen=True)
+class _CursorPosition:
+    sequence: int
+    reset: bool = False
+    reset_reason: str | None = None
+
+
 class EventRelay:
     """Poll fixed read-only node paths and retain normalized state changes."""
 
@@ -290,8 +344,10 @@ class EventRelay:
         client: httpx.Client | None = None,
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        generation: str | None = None,
     ):
         self.config = config.validated()
+        self.generation = self._validate_generation(generation or uuid.uuid4().hex)
         self._client = client or httpx.Client(
             timeout=self.config.request_timeout,
             verify=_tls_verify_from_env(),
@@ -307,6 +363,22 @@ class EventRelay:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._client_closed = False
+        self._client_close_lock = threading.Lock()
+
+    @staticmethod
+    def _validate_generation(generation: str) -> str:
+        if not generation or len(generation) > 64:
+            raise RelayInputError("generation must contain between 1 and 64 characters")
+        if not all(
+            character.isalnum() or character in ("-", "_") for character in generation
+        ):
+            raise RelayInputError(
+                "generation may contain only letters, numbers, '-' and '_'"
+            )
+        return generation
+
+    def _format_cursor(self, sequence: int) -> str:
+        return f"{self.generation}:{sequence}"
 
     def start(self) -> None:
         """Start polling. Calling start more than once is harmless."""
@@ -327,16 +399,31 @@ class EventRelay:
         self._stop_event.set()
         with self._condition:
             self._condition.notify_all()
+        client_closed = self._close_owned_client()
         thread = self._thread
         if thread and thread is not threading.current_thread():
-            thread.join(
-                timeout if timeout is not None else self.config.request_timeout + 1
+            shutdown_timeout = (
+                timeout
+                if timeout is not None
+                else len(_SOURCE_PATHS) * self.config.request_timeout + 1
             )
+            thread.join(shutdown_timeout)
         stopped = not thread or not thread.is_alive()
-        if stopped and self._owns_client and not self._client_closed:
-            self._client.close()
+        return stopped and client_closed
+
+    def _close_owned_client(self) -> bool:
+        if not self._owns_client:
+            return True
+        with self._client_close_lock:
+            if self._client_closed:
+                return True
+            try:
+                self._client.close()
+            except Exception:
+                LOGGER.exception("Failed to close RustChain event relay HTTP client")
+                return False
             self._client_closed = True
-        return stopped
+            return True
 
     @property
     def stopped(self) -> bool:
@@ -346,24 +433,45 @@ class EventRelay:
         """Poll all fixed endpoints once; return true only if all succeeded."""
         all_succeeded = True
         for source, path in _SOURCE_PATHS:
+            if self._stop_event.is_set():
+                return False
+            params = (
+                {"limit": self.config.miners_limit, "offset": 0}
+                if source == "miners"
+                else None
+            )
             try:
-                payload = self._fetch_source(path)
-                normalized = _normalize_source(source, payload)
+                payload = self._fetch_source(path, params=params)
+                normalized = _normalize_source(
+                    source,
+                    payload,
+                    miners_limit=self.config.miners_limit,
+                )
+                if self._stop_event.is_set():
+                    return False
                 self._record_success(source, normalized)
             except _PollFailure as exc:
+                if self._stop_event.is_set():
+                    return False
                 all_succeeded = False
                 self._record_failure(source, exc.data)
             except (httpx.TimeoutException, TimeoutError):
+                if self._stop_event.is_set():
+                    return False
                 all_succeeded = False
                 self._record_failure(
                     source, _error_data("UPSTREAM_TIMEOUT", retryable=True)
                 )
             except httpx.RequestError:
+                if self._stop_event.is_set():
+                    return False
                 all_succeeded = False
                 self._record_failure(
                     source, _error_data("TRANSPORT_RETRYABLE", retryable=True)
                 )
             except Exception:
+                if self._stop_event.is_set():
+                    return False
                 all_succeeded = False
                 self._record_failure(
                     source, _error_data("UPSTREAM_INVALID_RESPONSE", retryable=False)
@@ -379,7 +487,7 @@ class EventRelay:
 
     def get_batch(
         self,
-        after_cursor: int = 0,
+        after_cursor: str | int = "0",
         limit: int = 50,
         wait_seconds: float = 0.0,
     ) -> dict[str, Any]:
@@ -389,17 +497,34 @@ class EventRelay:
 
         with self._condition:
             while True:
-                oldest_cursor = self._events[0].cursor if self._events else 0
-                latest_cursor = self._events[-1].cursor if self._events else 0
-                if after_cursor > latest_cursor:
+                oldest_sequence = self._events[0].sequence if self._events else 0
+                latest_sequence = self._events[-1].sequence if self._events else 0
+                position = self._parse_cursor(after_cursor)
+                if not position.reset and position.sequence > latest_sequence:
                     raise RelayInputError(
-                        f"after_cursor {after_cursor} is ahead of latest cursor {latest_cursor}"
+                        f"after_cursor {after_cursor!r} is ahead of latest cursor "
+                        f"{self._format_cursor(latest_sequence)!r}"
                     )
 
-                cursor_expired = bool(self._events and after_cursor < oldest_cursor - 1)
-                effective_cursor = oldest_cursor - 1 if cursor_expired else after_cursor
+                cursor_expired = bool(
+                    self._events
+                    and (
+                        (position.reset and oldest_sequence > 1)
+                        or (
+                            not position.reset
+                            and position.sequence < oldest_sequence - 1
+                        )
+                    )
+                )
+                effective_sequence = (
+                    oldest_sequence - 1
+                    if cursor_expired or position.reset
+                    else position.sequence
+                )
                 available = [
-                    event for event in self._events if event.cursor > effective_cursor
+                    event
+                    for event in self._events
+                    if event.sequence > effective_sequence
                 ]
                 if available or wait_seconds == 0 or self._stop_event.is_set():
                     break
@@ -409,8 +534,13 @@ class EventRelay:
                 self._condition.wait(remaining)
 
             selected = available[:limit]
-            next_cursor = selected[-1].cursor if selected else after_cursor
-            has_more = any(event.cursor > next_cursor for event in self._events)
+            next_sequence = (
+                selected[-1].sequence
+                if selected
+                else (0 if position.reset else position.sequence)
+            )
+            next_cursor = self._format_cursor(next_sequence)
+            has_more = any(event.sequence > next_sequence for event in self._events)
             timed_out = bool(
                 wait_seconds > 0
                 and not selected
@@ -419,11 +549,14 @@ class EventRelay:
             )
             return {
                 "cursor_expired": cursor_expired,
+                "cursor_reset": position.reset,
                 "events": [event.as_dict() for event in selected],
+                "generation": self.generation,
                 "has_more": has_more,
-                "latest_cursor": latest_cursor,
+                "latest_cursor": self._format_cursor(latest_sequence),
                 "next_cursor": next_cursor,
-                "oldest_cursor": oldest_cursor,
+                "oldest_cursor": self._format_cursor(oldest_sequence),
+                "reset_reason": position.reset_reason,
                 "stopped": self._stop_event.is_set(),
                 "timed_out": timed_out,
             }
@@ -433,21 +566,21 @@ class EventRelay:
             return {
                 "buffer_capacity": self.config.buffer_size,
                 "buffered_events": len(self._events),
-                "latest_cursor": self._events[-1].cursor if self._events else 0,
-                "oldest_cursor": self._events[0].cursor if self._events else 0,
+                "generation": self.generation,
+                "latest_cursor": self._format_cursor(
+                    self._events[-1].sequence if self._events else 0
+                ),
+                "oldest_cursor": self._format_cursor(
+                    self._events[0].sequence if self._events else 0
+                ),
                 "running": bool(self._thread and self._thread.is_alive()),
                 "stopped": self._stop_event.is_set(),
             }
 
     def _validate_batch_input(
-        self, after_cursor: int, limit: int, wait_seconds: float
+        self, after_cursor: str | int, limit: int, wait_seconds: float
     ) -> None:
-        if (
-            isinstance(after_cursor, bool)
-            or not isinstance(after_cursor, int)
-            or after_cursor < 0
-        ):
-            raise RelayInputError("after_cursor must be a non-negative integer")
+        self._parse_cursor(after_cursor)
         if (
             isinstance(limit, bool)
             or not isinstance(limit, int)
@@ -463,12 +596,49 @@ class EventRelay:
                 f"wait_seconds must be between 0 and {self.config.max_wait_seconds}"
             )
 
-    def _fetch_source(self, path: str) -> Any:
+    def _parse_cursor(self, cursor: str | int) -> _CursorPosition:
+        if isinstance(cursor, bool):
+            raise RelayInputError("after_cursor must be a generation-qualified cursor")
+        if isinstance(cursor, int):
+            if cursor < 0:
+                raise RelayInputError("after_cursor sequence must be non-negative")
+            if cursor == 0:
+                return _CursorPosition(0)
+            return _CursorPosition(0, reset=True, reset_reason="legacy_cursor")
+        if not isinstance(cursor, str):
+            raise RelayInputError("after_cursor must be a string cursor")
+
+        cursor = cursor.strip()
+        if cursor in ("", "0"):
+            return _CursorPosition(0)
+        if ":" not in cursor:
+            if cursor.isdigit():
+                return _CursorPosition(0, reset=True, reset_reason="legacy_cursor")
+            raise RelayInputError("after_cursor must use '<generation>:<sequence>'")
+
+        generation, sequence_text = cursor.rsplit(":", 1)
+        try:
+            sequence = int(sequence_text)
+        except ValueError as exc:
+            raise RelayInputError("after_cursor sequence must be an integer") from exc
+        if sequence < 0:
+            raise RelayInputError("after_cursor sequence must be non-negative")
+        if generation != self.generation:
+            return _CursorPosition(0, reset=True, reset_reason="generation_changed")
+        return _CursorPosition(sequence)
+
+    def _fetch_source(
+        self,
+        path: str,
+        *,
+        params: dict[str, int] | None = None,
+    ) -> Any:
         try:
             with self._client.stream(
                 "GET",
                 f"{self.config.node_url}{path}",
                 headers={"Accept": "application/json"},
+                params=params,
                 timeout=self.config.request_timeout,
             ) as response:
                 if response.status_code >= 400:
@@ -536,8 +706,9 @@ class EventRelay:
 
     def _append_event(self, event_type: str, source: str, data: Any) -> None:
         with self._condition:
-            cursor = self._next_cursor
+            sequence = self._next_cursor
             self._next_cursor += 1
+            cursor = self._format_cursor(sequence)
             observed_at = (
                 datetime.fromtimestamp(self._wall_clock(), tz=timezone.utc)
                 .isoformat(timespec="milliseconds")
@@ -552,7 +723,9 @@ class EventRelay:
                     "type": event_type,
                 }
             )
-            self._events.append(RelayEvent(cursor, event_type, source, serialized))
+            self._events.append(
+                RelayEvent(sequence, cursor, event_type, source, serialized)
+            )
             self._condition.notify_all()
 
     def _poll_loop(self) -> None:
@@ -573,13 +746,47 @@ class EventRelayHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], relay: EventRelay, config: SSEConfig):
         self.relay = relay
         self.sse_config = config.validated()
-        self.client_slots = threading.BoundedSemaphore(self.sse_config.max_clients)
+        self.connection_slots = threading.BoundedSemaphore(self.sse_config.max_clients)
         super().__init__(address, EventRelayRequestHandler)
 
     def get_request(self) -> tuple[Any, Any]:
         request, client_address = super().get_request()
         request.settimeout(self.sse_config.write_timeout)
         return request, client_address
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Admit a connection before ThreadingMixIn creates its worker."""
+        if not self.connection_slots.acquire(blocking=False):
+            request.settimeout(min(self.sse_config.write_timeout, 0.25))
+            body = canonical_json(
+                {"error": "too_many_connections", "ok": False}
+            ).encode("utf-8")
+            response = (
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json; charset=utf-8\r\n"
+                b"Cache-Control: no-store\r\n"
+                b"Connection: close\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+                + body
+            )
+            try:
+                request.sendall(response)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.connection_slots.release()
+            self.shutdown_request(request)
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connection_slots.release()
 
 
 class EventRelayRequestHandler(BaseHTTPRequestHandler):
@@ -626,17 +833,10 @@ class EventRelayRequestHandler(BaseHTTPRequestHandler):
         return hmac.compare_digest(supplied[len(prefix) :], expected)
 
     def _serve_events(self, query: str) -> None:
-        if not self.server.client_slots.acquire(blocking=False):
-            self._send_json(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                {"error": "too_many_sse_clients", "ok": False},
-            )
-            return
         try:
             after_cursor, limit = self._parse_event_query(query)
             initial = self.server.relay.get_batch(after_cursor, limit, 0)
         except RelayInputError as exc:
-            self.server.client_slots.release()
             self._send_json(
                 HTTPStatus.BAD_REQUEST,
                 {"error": "invalid_request", "message": str(exc), "ok": False},
@@ -654,7 +854,19 @@ class EventRelayRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             batch = initial
-            cursor = after_cursor
+            cursor = batch["next_cursor"]
+            if batch["cursor_reset"]:
+                self._write_sse(
+                    "rustchain.cursor.reset",
+                    canonical_json(
+                        {
+                            "generation": batch["generation"],
+                            "next_cursor": batch["next_cursor"],
+                            "reason": batch["reset_reason"],
+                            "requested_cursor": after_cursor,
+                        }
+                    ),
+                )
             if batch["cursor_expired"]:
                 self._write_sse(
                     "rustchain.cursor.expired",
@@ -684,10 +896,8 @@ class EventRelayRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
             return
-        finally:
-            self.server.client_slots.release()
 
-    def _parse_event_query(self, query: str) -> tuple[int, int]:
+    def _parse_event_query(self, query: str) -> tuple[str, int]:
         try:
             params = parse_qs(query, keep_blank_values=True, max_num_fields=4)
         except ValueError as exc:
@@ -705,11 +915,12 @@ class EventRelayRequestHandler(BaseHTTPRequestHandler):
             "limit", [str(self.server.relay.config.max_batch_size)]
         )[0]
         try:
-            return int(cursor_value), int(limit_value)
+            limit = int(limit_value)
         except ValueError as exc:
-            raise RelayInputError("cursor and limit must be integers") from exc
+            raise RelayInputError("limit must be an integer") from exc
+        return cursor_value, limit
 
-    def _write_sse(self, event_type: str, data: str, cursor: int | None = None) -> None:
+    def _write_sse(self, event_type: str, data: str, cursor: str | None = None) -> None:
         lines = []
         if cursor is not None:
             lines.append(f"id: {cursor}")
@@ -779,8 +990,18 @@ def main(argv: list[str] | None = None) -> int:
     ).validated()
 
     relay = EventRelay(relay_config)
-    server = EventRelayHTTPServer((sse_config.host, sse_config.port), relay, sse_config)
+    try:
+        server = EventRelayHTTPServer(
+            (sse_config.host, sse_config.port), relay, sse_config
+        )
+    except Exception:
+        if not relay.stop():
+            LOGGER.error(
+                "RustChain event relay client did not close after bind failure"
+            )
+        raise
     stopping = threading.Event()
+    exit_code = 0
 
     def request_stop(signum: int, frame: Any) -> None:
         del signum, frame
@@ -799,10 +1020,12 @@ def main(argv: list[str] | None = None) -> int:
             server.handle_request()
     finally:
         server.server_close()
-        relay.stop()
+        if not relay.stop():
+            LOGGER.error("RustChain event poller did not stop before timeout")
+            exit_code = 1
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
