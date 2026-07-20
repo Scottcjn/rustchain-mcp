@@ -26,7 +26,7 @@ def test_timeout_config_respected():
 
 def test_timeout_returns_error():
     """A timeout during a tool call returns an MCP error, not a hang."""
-    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE, RUSTCHAIN_TIMEOUT
+    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE
     client = _make_client()
 
     with patch.object(client, "get", side_effect=httpx.TimeoutException("timed out")):
