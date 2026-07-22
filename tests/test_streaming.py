@@ -1,4 +1,3 @@
-import pytest
 from rustchain_mcp import RustChainMCPServer
 
 def test_server_capabilities_no_streaming():
