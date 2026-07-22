@@ -407,3 +407,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Start earning RTC today!** Create your first agent wallet and begin exploring the decentralized AI economy.
+
+## Streaming & long-running tools
+Currently, `rustchain-mcp` does not support tool streaming, progress notifications, or chunked results. All tool calls (including long-running operations like BoTTube video uploads or blockchain queries) are handled as **plain blocking calls**. The server's MCP capabilities do not declare progress or streaming support. Client integrations must wait synchronously for the full operation to complete before receiving a result.
