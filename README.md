@@ -381,11 +381,11 @@ rustchain-mcp --debug --log-file rustchain.log
 - 📖 **Documentation:** [rustchain.org](https://rustchain.org)
 - 💬 **Discord:** [RustChain Community](https://discord.gg/rustchain)
 - 🐛 **Issues:** [GitHub Issues](https://github.com/Scottcjn/Rustchain/issues)
-- 💰 **Bounties:** [Complete documentation bounties for RTC rewards](https://rustchain.org/bounties)
+- 💰 **Bounties:** [Complete documentation bounties for RTC rewards](https://github.com/Scottcjn/rustchain-bounties)
 
 ## Contributing
 
-We welcome contributions! Check out our [bounty system](https://rustchain.org/bounties) where you can earn RTC for:
+We welcome contributions! Check out our [bounty system](https://github.com/Scottcjn/rustchain-bounties) where you can earn RTC for:
 
 - 📝 Documentation improvements (1-50 RTC)
 - 🐛 Bug fixes (10-100 RTC)  
