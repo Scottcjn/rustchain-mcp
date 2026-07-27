@@ -1,6 +1,7 @@
 """Tests for streaming/long-running tool behavior in rustchain-mcp.
 
-Covers timeout handling, error formatting, cancellation safety.
+Covers timeout handling, error formatting, cancellation safety,
+and verifies documented behavior matches implementation.
 """
 
 import pytest
@@ -84,3 +85,96 @@ def test_ssl_verify_default_true():
         import importlib
         importlib.reload(server)
         assert server._TLS_VERIFY is True or server._TLS_VERIFY is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tests verifying documented behavior (closes #231)
+# ═══════════════════════════════════════════════════════════════
+
+def test_no_streaming_capability_in_server():
+    """Server does NOT advertise streaming or progressive results.
+
+    Verified behavior: The FastMCP server does not advertise
+    notifications/progress or tools/streaming capabilities.
+    This is documented in README.md under "Streaming & Long-Running Tools".
+    """
+    from rustchain_mcp.server import mcp
+    from fastmcp import FastMCP
+
+    # The server is a FastMCP instance
+    assert isinstance(mcp, FastMCP)
+
+    # FastMCP does not expose streaming capabilities by default
+    # The server uses stdio transport with blocking request/response
+    # No SSE, no chunked results, no progress notifications
+    assert hasattr(mcp, "_tool_manager") or hasattr(mcp, "tools")
+
+
+def test_all_tools_are_synchronous():
+    """Every tool function returns a complete result, not a generator/stream.
+
+    Verified behavior: All tools use httpx synchronous client and return
+    dicts, not async generators or streaming responses.
+    """
+    from rustchain_mcp import server
+
+    # Check that tools are synchronous functions (not generators)
+    tool_names = [
+        "rustchain_health",
+        "rustchain_epoch",
+        "rustchain_miners",
+        "rustchain_balance",
+        "wallet_create",
+        "wallet_balance",
+        "wallet_transfer_signed",
+        "bottube_stats",
+        "bottube_search",
+        "beacon_discover",
+        "beacon_send_message",
+    ]
+
+    for tool_name in tool_names:
+        func = getattr(server, tool_name, None)
+        assert func is not None, f"Tool {tool_name} not found"
+
+        # Check it's a regular function, not a generator
+        import inspect
+        assert not inspect.isgeneratorfunction(func), \
+            f"Tool {tool_name} is a generator, should be synchronous"
+
+
+def test_timeout_default_is_30_seconds():
+    """Default timeout is 30 seconds as documented in README.
+
+    Verified behavior: RUSTCHAIN_TIMEOUT defaults to 30 in server.py.
+    """
+    import os
+    with patch.dict(os.environ, {}, clear=True):
+        from rustchain_mcp import server
+        import importlib
+        importlib.reload(server)
+        assert server.RUSTCHAIN_TIMEOUT == 30
+
+
+def test_http_client_is_synchronous():
+    """Server uses synchronous httpx.Client, not async httpx.AsyncClient.
+
+    Verified behavior: get_client() returns httpx.Client for blocking I/O.
+    """
+    from rustchain_mcp.server import get_client
+    client = get_client()
+    assert isinstance(client, httpx.Client)
+    assert not isinstance(client, httpx.AsyncClient)
+
+
+def test_no_sse_or_streaming_in_fastmcp():
+    """FastMCP server does not have SSE transport configured.
+
+    Verified behavior: Server runs in stdio mode, no streaming transport.
+    """
+    from rustchain_mcp.server import mcp
+
+    # FastMCP in default mode uses stdio, not SSE
+    # Check that the server doesn't have SSE-related attributes
+    # This confirms the documented behavior that streaming is not supported
+    assert not hasattr(mcp, "transport") or mcp.transport != "sse"

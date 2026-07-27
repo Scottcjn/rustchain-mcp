@@ -293,6 +293,63 @@ export BEACON_MESSAGE_RETENTION="30d"
 - 🎯 **Scoped permissions** limit agent actions to authorized operations
 - 🚫 **No seed phrase exposure**: Seed phrases are encrypted and never returned in tool responses
 
+## Streaming & Long-Running Tools
+
+### Does rustchain-mcp support streaming?
+
+**No** — all tools in rustchain-mcp are **synchronous blocking calls**. Each tool
+executes the full HTTP request and returns the complete response at once. There is
+no SSE streaming, no chunked results, and no `notifications/progress` capability
+advertised in the MCP server manifest.
+
+### Why blocking is the right default
+
+The upstream RustChain, BoTTube, and Beacon APIs are designed for request/response
+exchanges — they return JSON payloads in a single HTTP response. Adding SSE streaming
+would require server-side support that doesn't exist on these APIs today.
+
+### Timeout behavior
+
+Every tool call uses a configurable HTTP timeout (default: 30 seconds, set via
+`RUSTCHAIN_TIMEOUT` env var). If the upstream API doesn't respond in time, the tool
+returns an `httpx.TimeoutException` — it does **not** hang indefinitely.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `RUSTCHAIN_TIMEOUT` | `30` | Seconds before HTTP timeout for any upstream call |
+
+### What long-running operations actually do
+
+Operations like `wallet_transfer_signed` and `bounty_search` can take longer than
+simple reads, but they still follow the same blocking pattern:
+
+1. **Signing** (wallet tools) — Ed25519 signing happens locally in <1ms
+2. **Network call** — single HTTP POST/GET with timeout protection
+3. **Response** — complete JSON returned at once
+
+There is no progressive result streaming. If you need partial results for real-time
+dashboards, poll the tool at regular intervals from your client code.
+
+### MCP capability flags
+
+The server does **not** advertise:
+- `notifications/progress` — no progress tokens
+- `tools/streaming` — no SSE or chunked tool output
+- `resources/subscribe` — no live resource updates
+
+Any MCP client relying on streaming capabilities should not expect them from this
+server. The server's `FastMCP` instance runs in **stdio mode** by default (single
+JSON-RPC request/response per tool call).
+
+### Cancellation
+
+MCP clients can cancel an in-flight tool call at any time. Because the server uses
+synchronous `httpx` requests, cancellation causes the HTTP connection to close — the
+upstream API sees a normal TCP disconnect and cleans up. No orphaned server-side
+state is left behind.
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
