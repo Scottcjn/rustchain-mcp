@@ -315,6 +315,121 @@ Error: Video upload to BoTTube failed
 Solution: Check file size limits and format compatibility
 ```
 
+## Streaming & Long-Running Tool Behavior
+
+rustchain-mcp **does not** implement MCP streaming, chunked results, or progress notifications for long-running tools. Every tool follows a simple blocking call pattern. This section documents the real behavior with code references.
+
+### Execution Model
+
+All 37 tools are synchronous Python functions that make blocking `httpx.Client` calls:
+
+```python
+# Every tool follows this pattern (ref: rustchain_mcp/server.py lines 86–906)
+r = get_client().get(f"{RUSTCHAIN_NODE}/api/endpoint")
+r.raise_for_status()
+return r.json()
+```
+
+- **No streaming** — results are returned only when the full HTTP response arrives.
+- **No `Context.report_progress()`** — none of the tools accept a `Context` parameter, so FastMCP progress notifications are never sent.
+- **No async/await** — all tool functions are synchronous (`def`, not `async def`).
+
+Reference: `rustchain_mcp/server.py` lines 64–68 (`get_client()`), lines 86–906 (all tool implementations).
+
+### Timeout Configuration
+
+Every HTTP request shares a single `httpx.Client` with a configurable timeout:
+
+```python
+# rustchain_mcp/server.py line 38
+RUSTCHAIN_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT", "30"))
+
+# rustchain_mcp/server.py lines 64–68
+_client = httpx.Client(timeout=RUSTCHAIN_TIMEOUT, verify=_TLS_VERIFY)
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUSTCHAIN_TIMEOUT` | 30 | HTTP request timeout in seconds for all RPC calls |
+
+To increase the timeout for slow nodes:
+
+```bash
+RUSTCHAIN_TIMEOUT=60 rustchain-mcp
+```
+
+### Tool Latency & Timeout Behavior
+
+| Tool Category | Typical Latency | Timeout | Behavior on Timeout |
+|---|---|---|---|
+| Read tools (balance, health, epoch) | <1s | 30s | `httpx.TimeoutException` → MCP error response |
+| Transfer tools | 1–5s | 30s | `httpx.TimeoutException` → transfer NOT submitted |
+| Bounty search | 1–3s | 30s | Returns partial results or empty list |
+| Network health (4 nodes) | 3–10s | 10s per node | Skips failed nodes, returns partial results |
+| Greenhouse (green_tracker) | 1–15s | 15s | Falls back to known fleet data |
+
+Reference: `network_health` uses a per-node timeout of 10s (line 1192);
+`green_tracker` uses 15s (line 1239). All other tools use the module-wide default (30s, line 38).
+
+### Error Handling
+
+HTTP errors are caught and returned as structured MCP error responses:
+
+```python
+# rustchain_mcp/server.py lines 71–77
+def _handle_api_error(response: httpx.Response) -> str:
+    try:
+        error_data = response.json()
+        return error_data.get("error") or error_data.get("message") or f"HTTP {response.status_code}"
+    except Exception:
+        return f"HTTP {response.status_code}: {response.text[:200]}"
+```
+
+Tools catch `httpx.HTTPStatusError` and return `{"error": ..., "status": "error"}` instead of crashing. Network-level errors (`TimeoutException`, `ConnectError`) propagate up through FastMCP and are surfaced as MCP error messages.
+
+### Capability Advertisement
+
+The server's `InitializeResult` capabilities do **not** include streaming or progress. The FastMCP `ToolsCapability` only supports `listChanged`:
+
+```python
+# rustchain_mcp/server.py lines 41–50
+mcp = FastMCP(
+    "RustChain + BoTTube + Beacon",
+    instructions=(...),
+    # No experimental_capabilities for streaming
+)
+```
+
+- No `"streaming"` or `"progress"` key in `experimental_capabilities`.
+- No tool declares `progress=True` or any streaming annotation.
+- MCP progress notifications (`notifications/progress`) are never sent.
+
+### Cancellation
+
+MCP client-initiated cancellation stops waiting for the HTTP response at the transport layer. However, the upstream RustChain/BoTTube/Beacon node may still process a submitted request (especially transfers) even if the MCP client cancels. This is standard MCP transport behavior — cancellation only stops waiting for the response, not the upstream operation.
+
+**Best practice**: Use idempotency keys or check balance/status after a cancelled transfer to avoid double-submission.
+
+### Progress Reporting Support
+
+FastMCP provides `Context.report_progress()` which sends `notifications/progress` to MCP clients. **rustchain-mcp does not use this.** Tools would need to accept a `ctx: Context` parameter and call `ctx.report_progress()` — none do.
+
+To add progress reporting for a tool in the future:
+```python
+@mcp.tool()
+def my_long_tool(ctx: Context, ...) -> dict:
+    ctx.report_progress(0, 100, "Starting...")
+    # ... do work ...
+    ctx.report_progress(50, 100, "Halfway...")
+    # ... do work ...
+    ctx.report_progress(100, 100, "Done")
+    return result
+```
+
+Reference: `fastmcp.Context.report_progress()` (FastMCP 3.4+).
+
+---
+
 ### Stable Error Responses for Agent Clients
 
 MCP clients should treat failed RustChain, BoTTube, and Beacon calls as
