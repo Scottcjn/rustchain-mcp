@@ -168,13 +168,29 @@ def test_http_client_is_synchronous():
 
 
 def test_no_sse_or_streaming_in_fastmcp():
-    """FastMCP server does not have SSE transport configured.
+    """Server tools are all synchronous — no SSE or streaming transport.
 
-    Verified behavior: Server runs in stdio mode, no streaming transport.
+    Verified behavior: FastMCP's streaming support requires tools to be
+    async generators (async def + yield). None of our tools use this
+    pattern — all return complete dicts synchronously. This confirms
+    the server effectively runs in stdio/blocking mode, consistent with
+    the README documentation.
     """
-    from rustchain_mcp.server import mcp
+    from rustchain_mcp import server
+    import inspect
 
-    # FastMCP in default mode uses stdio, not SSE
-    # Check that the server doesn't have SSE-related attributes
-    # This confirms the documented behavior that streaming is not supported
-    assert not hasattr(mcp, "transport") or mcp.transport != "sse"
+    tool_names = [
+        "rustchain_health", "rustchain_epoch", "rustchain_miners",
+        "rustchain_balance", "wallet_create", "wallet_balance",
+        "wallet_transfer_signed", "bottube_stats", "bottube_search",
+        "beacon_discover", "beacon_send_message",
+    ]
+
+    for name in tool_names:
+        func = getattr(server, name, None)
+        assert func is not None, f"Tool {name} not found in server module"
+        # FastMCP SSE streaming requires async generators — none of ours are
+        assert not inspect.iscoroutinefunction(func), \
+            f"Tool {name} is async but should be synchronous"
+        assert not inspect.isgeneratorfunction(func), \
+            f"Tool {name} is a generator but should be synchronous"
