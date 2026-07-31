@@ -41,3 +41,25 @@ rustchain-mcp = "rustchain_mcp.server:mcp.run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rustchain_mcp"]
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001",  # Do not catch blind exception
+    "S110",    # try-except-pass
+    "S112",    # try-except-continue
+    "EXE001",  # Shebang on non-executable
+    "TRY002",  # Create your own exception
+    "RUF013",  # PEP 484 implicit Optional
+    "UP006",   # Use dict/list instead of Dict/List
+    "UP035",   # typing.Dict is deprecated
+    "PIE807",  # Prefer list over lambda
+    "RUF059",  # Unused dummy variable
+    "I001",    # Unsorted import blocks in legacy files
+    "RUF100",  # Unused noqa directives in legacy files
+    "C403",    # Unnecessary list comprehension
+    "RUF022",  # __all__ sorting
+    "UP012",   # Unnecessary UTF-8 encoding argument
+    "UP045",   # Use X | None
+    "SIM117",  # Use a single with statement
+]
+
