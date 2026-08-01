@@ -6,3 +6,4 @@ build/
 .eggs/
 *.egg
 .env
+.venv/

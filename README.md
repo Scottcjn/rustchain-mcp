@@ -282,6 +282,68 @@ export BEACON_MESSAGE_RETENTION="30d"
 }
 ```
 
+## Streaming & Long-Running Tools
+
+**Short answer (rustchain-mcp#231):** the server does **not** support SSE
+streaming or MCP `notifications/progress`. Every tool is a **synchronous,
+blocking** call: it awaits the full upstream HTTP response and returns a
+single completed JSON result. Long-running queries (e.g. `/api/miners` on a
+busy node) simply block until the response is ready, or until the request
+hits `RUSTCHAIN_TIMEOUT` (default 30s), at which point they return a
+structured error object instead of hanging.
+
+### What the code actually does
+
+- The server is built on `FastMCP` with plain `@mcp.tool()` functions
+  (`rustchain_mcp/server.py`). **None of the 37 registered tools accept a
+  `ctx`/`context` parameter**, so none can emit progress notifications —
+  FastMCP only reports progress when a tool takes a `Context` and calls
+  `ctx.report_progress(...)`.
+- All tools return a single `dict` (or list). **No tool is a generator or
+  async-generator**, i.e. none yield partial / streamed results.
+- `get_client()` returns one shared, **blocking** `httpx.Client`
+  (`timeout=RUSTCHAIN_TIMEOUT`, `verify=_TLS_VERIFY`). Tools call
+  `client.get(...)` / `client.post(...)` and block on the response.
+- The server advertises **no experimental streaming capability** —
+  `mcp.experimental_capabilities == {}`.
+
+### Capability flags advertised
+
+| Capability | Advertised? | Notes |
+|---|---|---|
+| `tools` | ✅ | All 37 tools |
+| `resources` / `prompts` | ✅ (FastMCP defaults) | Not used by this server |
+| `logging` | ❌ | Not enabled |
+| `progress` / streaming | ❌ | **Not implemented** — no `notifications/progress` is ever sent |
+
+### Behavior on a slow / long-running call
+
+| Phase | Behavior |
+|---|---|
+| Request in flight | Tool blocks; the caller waits for the full response |
+| Success | A single completed JSON result is returned |
+| Timeout (`RUSTCHAIN_TIMEOUT`) | `httpx.TimeoutException` → structured MCP error, **not** a hang |
+| Cancellation | Client-initiated abort stops waiting at the transport layer |
+
+### How to verify
+
+The contract above is enforced by tests in
+[`tests/test_streaming_contract.py`](tests/test_streaming_contract.py):
+
+- `test_no_tool_accepts_progress_context` — asserts no tool takes a progress `ctx`.
+- `test_no_tool_is_a_generator_or_async_generator` — asserts no tool streams.
+- `test_server_advertises_no_experimental_streaming_capability` — asserts
+  `experimental_capabilities == {}`.
+- `test_slow_tool_blocks_until_complete_and_returns_single_result` — a mocked
+  slow `GET /health` blocks the tool for the full delay and returns exactly one
+  completed result (no partial / progress output).
+
+If streaming or progress reporting is ever added, these tests fail — keeping
+the documentation honest.
+
+> See also [`docs/STREAMING_BEHAVIOR.md`](docs/STREAMING_BEHAVIOR.md) for the
+> full timeout / error / cancellation matrix.
+
 ## Security
 
 - 🔒 **Private keys** are encrypted at rest using AES-256 (via Fernet)
