@@ -87,3 +87,33 @@ transfers where this matters.
 3. **Verify after timeout** — if a transfer times out, check the balance
    before retrying to avoid double-submission.
 4. **Use short-lived wallets** — generate wallets per-session for safety.
+
+
+## Long-Running Tool Behavior (Detailed)
+
+### Current Status
+| Feature | Status |
+|---------|--------|
+| MCP tool execution | Complete |
+| HTTP timeout control | Complete |
+| Error response format | Complete |
+| Transport cancellation | Complete |
+| Input validation | Complete |
+
+### Planned Features
+| Feature | Status |
+|---------|--------|
+| Progress notifications | Planned |
+| SSE streaming | Planned |
+| Partial results | Planned |
+| Idempotency keys | Planned |
+
+### Known Limitations
+1. No real streaming - all tools are request-response
+2. No progress notifications - long ops appear to hang
+3. No partial results - single source failure may fail entire call
+4. Blocking I/O - synchronous httpx calls
+
+### Answer to #231
+rustchain-mcp does NOT currently support real streaming or progressive results.
+All tools return results only when fully complete.
