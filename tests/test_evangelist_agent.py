@@ -20,13 +20,13 @@ class _DummyClient:
         self._get_payloads = list(get_payloads or [])
         self.posts: list[tuple[str, Any]] = []
 
-    def get(self, url: str, params: dict[str, Any] | None = None, timeout: int | None = None, follow_redirects: bool | None = None):  # noqa: ARG002,E501
+    def get(self, url: str, params: dict[str, Any] | None = None, timeout: int | None = None, follow_redirects: bool | None = None):
         if self._get_payloads:
             code, payload = self._get_payloads.pop(0)
             return _DummyResponse(code, payload)
         return _DummyResponse(500, {"error": "no payloads"})
 
-    def post(self, url: str, json: Any = None, headers: dict[str, str] | None = None, timeout: int | None = None):  # noqa: ARG002,E501
+    def post(self, url: str, json: Any = None, headers: dict[str, str] | None = None, timeout: int | None = None):
         self.posts.append((url, json))
         return _DummyResponse(500, {"error": "post not configured"})
 
@@ -231,9 +231,9 @@ def test_run_once_dry_run(monkeypatch):
 def test_run_once_no_agents(monkeypatch):
     """Test run_once when no agents are discovered."""
     # Mock empty discoveries
-    monkeypatch.setattr(evangelist_agent, "discover_agents_from_a2a", lambda: [])
-    monkeypatch.setattr(evangelist_agent, "discover_agents_from_beacon", lambda: [])
-    monkeypatch.setattr(evangelist_agent, "discover_agents_from_bottube", lambda: [])
+    monkeypatch.setattr(evangelist_agent, "discover_agents_from_a2a", list)
+    monkeypatch.setattr(evangelist_agent, "discover_agents_from_beacon", list)
+    monkeypatch.setattr(evangelist_agent, "discover_agents_from_bottube", list)
     
     # Track calls
     ping_calls = []

@@ -1,8 +1,8 @@
 """
 Mock BoTTube service for testing.
 """
-from typing import Dict, Any
 import json
+from typing import Any
 
 
 class MockBoTTubeService:
@@ -39,11 +39,11 @@ class MockBoTTubeService:
             }
         }
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Mock GET /api/stats endpoint."""
         return self.stats
     
-    def get_agent_profile(self, agent_name: str) -> Dict[str, Any]:
+    def get_agent_profile(self, agent_name: str) -> dict[str, Any]:
         """Mock GET /api/agents/{agent_name} endpoint."""
         return self.agent_profiles.get(agent_name, {"error": "Agent not found"})
     
@@ -56,7 +56,7 @@ class MockBoTTubeService:
 mock_bottube = MockBoTTubeService()
 
 
-def create_bottube_response(status_code: int = 200, **kwargs) -> Dict[str, Any]:
+def create_bottube_response(status_code: int = 200, **kwargs) -> dict[str, Any]:
     """Create response data for BoTTube API."""
     response_data = kwargs.get("response_data", {})
     
@@ -69,6 +69,7 @@ def create_bottube_response(status_code: int = 200, **kwargs) -> Dict[str, Any]:
 def setup_bottube_mocks(monkeypatch, mock_bottube_service: MockBoTTubeService = None):
     """Setup monkeypatch mocks for BoTTube API calls."""
     from unittest.mock import Mock
+
     import evangelist_agent
     
     if mock_bottube_service is None:
@@ -103,7 +104,7 @@ def setup_bottube_mocks(monkeypatch, mock_bottube_service: MockBoTTubeService = 
     return mock_bottube_service
 
 
-def create_invalid_bottube_response() -> Dict[str, Any]:
+def create_invalid_bottube_response() -> dict[str, Any]:
     """Create invalid BoTTube response for error testing."""
     return {
         "top_agents": [
@@ -116,7 +117,7 @@ def create_invalid_bottube_response() -> Dict[str, Any]:
     }
 
 
-def create_empty_bottube_response() -> Dict[str, Any]:
+def create_empty_bottube_response() -> dict[str, Any]:
     """Create empty BoTTube response."""
     return {
         "total_videos": 0,

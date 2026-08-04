@@ -1,9 +1,11 @@
 """
 Pytest configuration and shared fixtures for rustchain-mcp tests.
 """
-import pytest
 from unittest.mock import Mock
+
 import httpx
+import pytest
+
 import evangelist_agent
 
 

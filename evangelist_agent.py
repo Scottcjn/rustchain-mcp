@@ -25,7 +25,6 @@ from typing import Any
 
 import httpx
 
-
 # Self-signed cert on dev nodes
 _TLS_VERIFY = os.environ.get("TLS_VERIFY", "0") != "0"
 # ── Configuration ──────────────────────────────────────────────
@@ -62,7 +61,7 @@ def discover_agents_from_beacon() -> list[dict[str, Any]]:
             data: Any = r.json()
             agents = data.get("agents", []) if isinstance(data, dict) else []
             return list(agents) if isinstance(agents, list) else []
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning(f"Beacon Atlas unavailable: {e}")
     return []
 
@@ -81,7 +80,7 @@ def discover_agents_from_bottube() -> list[str]:
                 if isinstance(a, dict) and isinstance(a.get("agent_name"), str):
                     out.append(a["agent_name"])
             return out
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning(f"BoTTube unavailable: {e}")
     return []
 
@@ -99,7 +98,7 @@ def discover_agents_from_a2a():
             if r.status_code == 200:
                 card = r.json()
                 log.info(f"A2A card OK: {card.get('name', url)}")
-        except Exception:
+        except Exception:  # noqa: BLE001
             log.warning(f"A2A card unreachable: {url}")
     return agents
 
@@ -112,7 +111,7 @@ def generate_onboarding_post() -> dict[str, str]:
     try:
         health = client.get(f"{RUSTCHAIN_NODE}/health", timeout=10).json()
         stats = client.get(f"{BOTTUBE_URL}/api/stats", timeout=10).json()
-    except Exception:
+    except Exception:  # noqa: BLE001
         health = {"version": "2.2.1-rip200", "ok": True}
         stats = {"agents": 130, "videos": 850, "total_views": 57000}
 
@@ -191,7 +190,7 @@ def beacon_ping_agent(agent_id: str, message: str, dry_run: bool = False) -> boo
         else:
             log.warning(f"Ping to {agent_id} returned {r.status_code}")
             return False
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning(f"Ping failed for {agent_id}: {e}")
         return False
 
@@ -221,7 +220,7 @@ def post_to_moltbook(title: str, content: str, submolt: str, dry_run: bool = Fal
         else:
             log.warning(f"Moltbook post failed: {r.status_code} {r.text[:100]}")
             return False
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning(f"Moltbook post error: {e}")
         return False
 
@@ -240,10 +239,10 @@ def run_once(dry_run: bool = False):
     # 2. Discover agents
     beacon_agents = discover_agents_from_beacon()
     bottube_agents = discover_agents_from_bottube()
-    all_agents = list(set(
-        [a.get("id", a) if isinstance(a, dict) else a
-         for a in beacon_agents + bottube_agents]
-    ))
+    all_agents = list({
+        a.get("id", a) if isinstance(a, dict) else a
+         for a in beacon_agents + bottube_agents
+    })
     log.info(f"Discovered {len(all_agents)} agents")
 
     # 3. Ping new agents (up to MAX_PINGS_PER_RUN)
@@ -280,7 +279,7 @@ def main():
         while True:
             try:
                 run_once(dry_run=args.dry_run)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error(f"Run failed: {e}")
             log.info(f"Sleeping {INTERVAL_SECONDS}s until next run...")
             time.sleep(INTERVAL_SECONDS)

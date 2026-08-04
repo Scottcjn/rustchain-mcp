@@ -18,14 +18,14 @@ import json
 import os
 import secrets
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Use cryptography library for Ed25519 (available in Python 3.8+)
 try:
     from cryptography.fernet import Fernet
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     CRYPTO_AVAILABLE = True
 except ImportError:
     CRYPTO_AVAILABLE = False
@@ -353,7 +353,7 @@ def _mnemonic_to_seed(mnemonic: str, passphrase: str = "") -> bytes:
     Returns:
         64-byte seed
     """
-    salt = f"mnemonic{passphrase}".encode('utf-8')
+    salt = f"mnemonic{passphrase}".encode()
     mnemonic_bytes = mnemonic.encode('utf-8')
     
     # PBKDF2-HMAC-SHA512 with 2048 iterations (BIP39 standard)
@@ -545,7 +545,7 @@ def verify_signature(message: bytes, signature_hex: str, public_key_hex: str) ->
             verify_key = nacl_signing.VerifyKey(public_key)
             verify_key.verify(message, signature)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
     
     elif ED25519_AVAILABLE:
@@ -553,7 +553,7 @@ def verify_signature(message: bytes, signature_hex: str, public_key_hex: str) ->
             verify_key = ed25519.VerifyingKey(public_key)
             verify_key.verify(signature, message)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
     
     else:
@@ -635,7 +635,7 @@ def create_wallet(agent_name: str, password: str = "") -> dict[str, Any]:
     }
 
 
-def load_wallet(wallet_id: str, password: str = "") -> Optional[dict[str, Any]]:
+def load_wallet(wallet_id: str, password: str = "") -> dict[str, Any] | None:
     """
     Load a wallet from the keystore.
     
@@ -669,7 +669,7 @@ def load_wallet(wallet_id: str, password: str = "") -> Optional[dict[str, Any]]:
             "mnemonic": mnemonic,
             "created_at": keystore_data.get("created_at"),
         }
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Decryption failed (wrong password or corrupted data)
         return None
 
@@ -696,7 +696,7 @@ def list_wallets() -> list[dict[str, Any]]:
                 "address": keystore_data["address"],
                 "created_at": keystore_data.get("created_at"),
             })
-        except Exception:
+        except Exception:  # noqa: BLE001,S112
             continue
     
     return wallets
@@ -721,7 +721,7 @@ def export_keystore(password: str = "") -> dict[str, Any]:
                 with open(wallet_file, 'r') as f:
                     wallet_data = json.load(f)
                 wallets.append(wallet_data)
-            except Exception:
+            except Exception:  # noqa: BLE001,S112
                 continue
     
     export_data = {

@@ -3,17 +3,18 @@ Tests for RustChain CrewAI Tools
 """
 
 from unittest.mock import patch
+
 from rustchain_crewai import (
-    RustChainCheckBalance,
-    RustChainListBounties,
-    RustChainGetNodeHealth,
-    RustChainGetCurrentEpoch,
-    RustChainGetMiners,
-    RustChainBoTTubeSearch,
-    RustChainBoTTubeStats,
+    RustChainBeaconChat,
     RustChainBeaconDiscover,
     RustChainBeaconNetworkStats,
-    RustChainBeaconChat,
+    RustChainBoTTubeSearch,
+    RustChainBoTTubeStats,
+    RustChainCheckBalance,
+    RustChainGetCurrentEpoch,
+    RustChainGetMiners,
+    RustChainGetNodeHealth,
+    RustChainListBounties,
 )
 
 
