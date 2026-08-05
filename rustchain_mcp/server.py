@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RustChain + BoTTube + Beacon MCP Server
 ========================================
