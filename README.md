@@ -249,7 +249,18 @@ imported = wallet_import(
     source="abandon ability able about above absent absorb abstract absurd abuse access accident",
     wallet_id="imported-wallet"
 )
-print(f"Imported wallet: {imported['address']}")
+### Streaming & Long-Running Tools
+
+`rustchain-mcp` is built on FastMCP and standard MCP JSON-RPC protocol:
+
+- **Execution Model:** MCP tools execute synchronously (request/response) per MCP specification. Each tool call blocks until the node or API operation completes.
+- **Progress Reporting:** Long-running operations (such as large epoch scans, video uploads, or blockchain syncing) support progress context via MCP `Context` parameter (`ctx.report_progress(current, total)`).
+- **Timeouts:** HTTP network calls to RustChain, BoTTube, and Beacon use configurable timeouts controlled by `RUSTCHAIN_TIMEOUT` (default: 30 seconds).
+
+```python
+# Example: Setting extended timeout for long-running operations
+import os
+os.environ["RUSTCHAIN_TIMEOUT"] = "60"  # Set 60s timeout for slow network calls
 ```
 
 ## Configuration Options
