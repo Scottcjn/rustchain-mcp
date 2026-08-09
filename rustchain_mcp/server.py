@@ -50,13 +50,17 @@ mcp = FastMCP(
 )
 
 # TLS verification — secure by default, configurable for self-signed certs
-_TLS_VERIFY = os.environ.get("RUSTCHAIN_CA_BUNDLE",
-              os.environ.get("RUSTCHAIN_TLS_VERIFY", "true")).lower()
-if _TLS_VERIFY in ("false", "0", "no"):
+_TLS_RAW = os.environ.get("RUSTCHAIN_CA_BUNDLE",
+           os.environ.get("RUSTCHAIN_TLS_VERIFY", "true"))
+_TLS_NORM = _TLS_RAW.strip().lower()
+if _TLS_NORM in ("false", "0", "no"):
     _TLS_VERIFY = False
-elif _TLS_VERIFY == "true":
+elif _TLS_NORM in ("true", "1", "yes"):
     _TLS_VERIFY = True
-# else: treat as path to CA bundle
+else:
+    # treat as path to a CA bundle — keep the ORIGINAL case, since the
+    # filesystem is case-sensitive (lowercasing the path breaks lookups)
+    _TLS_VERIFY = _TLS_RAW.strip()
 
 # Shared HTTP client
 _client = None
