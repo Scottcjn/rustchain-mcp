@@ -22,14 +22,21 @@ Credits:
 License: MIT
 """
 
+import atexit
 import json
+import logging
 import os
+import threading
 import time
 
 import httpx
 from fastmcp import FastMCP
 
 from . import rustchain_crypto
+from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_total
+
+
+LOGGER = logging.getLogger("rustchain_mcp.server")
 
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
@@ -65,11 +72,35 @@ else:
 # Shared HTTP client
 _client = None
 
+# The MCP event relay is lazy so importing or running the regular MCP server
+# never opens the standalone SSE listener. It only performs fixed-path GETs.
+_event_relay = None
+_event_relay_lock = threading.Lock()
+
 def get_client() -> httpx.Client:
     global _client
     if _client is None:
         _client = httpx.Client(timeout=RUSTCHAIN_TIMEOUT, verify=_TLS_VERIFY)
     return _client
+
+
+def get_event_relay() -> EventRelay:
+    """Return the process-local relay, starting its read-only poller lazily."""
+    global _event_relay
+    with _event_relay_lock:
+        if _event_relay is None:
+            _event_relay = EventRelay(EventRelayConfig.from_env())
+            _event_relay.start()
+        return _event_relay
+
+
+def _shutdown_event_relay() -> None:
+    relay = _event_relay
+    if relay is not None and not relay.stop():
+        LOGGER.warning("RustChain event relay did not stop before shutdown timeout")
+
+
+atexit.register(_shutdown_event_relay)
 
 
 def _handle_api_error(response: httpx.Response) -> str:
@@ -79,6 +110,89 @@ def _handle_api_error(response: httpx.Response) -> str:
         return error_data.get("error") or error_data.get("message") or f"HTTP {response.status_code}"
     except Exception:
         return f"HTTP {response.status_code}: {response.text[:200]}"
+
+
+def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) -> dict:
+    """Query the canonical read-only balance endpoint for a miner or wallet ID."""
+    if not isinstance(miner_id, str) or not miner_id.strip():
+        return {
+            "ok": False,
+            "error": {
+                "code": "INVALID_IDENTIFIER",
+                "message": "miner_id must be a non-empty string",
+                "retryable": False,
+                "source": "rustchain",
+            },
+        }
+
+    miner_id = miner_id.strip()
+    http_client = client or get_client()
+    try:
+        response = http_client.get(
+            f"{RUSTCHAIN_NODE}/wallet/balance",
+            params={"miner_id": miner_id},
+        )
+        response.raise_for_status()
+    except httpx.TimeoutException:
+        return {
+            "ok": False,
+            "error": {
+                "code": "UPSTREAM_TIMEOUT",
+                "message": "RustChain balance endpoint timed out",
+                "retryable": True,
+                "source": "rustchain",
+                "details": {"endpoint": "/wallet/balance", "miner_id": miner_id},
+            },
+        }
+    except httpx.RequestError:
+        return {
+            "ok": False,
+            "error": {
+                "code": "TRANSPORT_RETRYABLE",
+                "message": "RustChain balance endpoint could not be reached",
+                "retryable": True,
+                "source": "rustchain",
+                "details": {"endpoint": "/wallet/balance", "miner_id": miner_id},
+            },
+        }
+    except httpx.HTTPStatusError:
+        return {
+            "ok": False,
+            "error": {
+                "code": "NODE_UNAVAILABLE",
+                "message": _handle_api_error(response),
+                "retryable": response.status_code >= 500,
+                "source": "rustchain",
+                "details": {
+                    "endpoint": "/wallet/balance",
+                    "miner_id": miner_id,
+                    "status_code": response.status_code,
+                },
+            },
+        }
+
+    try:
+        data = response.json()
+    except (ValueError, json.JSONDecodeError):
+        data = None
+    if not isinstance(data, dict) or "amount_rtc" not in data:
+        return {
+            "ok": False,
+            "error": {
+                "code": "MISSING_EXPECTED_FIELD",
+                "message": "RustChain balance response did not contain amount_rtc",
+                "retryable": False,
+                "source": "rustchain",
+                "details": {"endpoint": "/wallet/balance", "miner_id": miner_id},
+            },
+        }
+    amount_rtc = data["amount_rtc"]
+    canonical_miner_id = data.get("miner_id") or miner_id
+    data["miner_id"] = canonical_miner_id
+    data["wallet_id"] = data.get("wallet_id") or canonical_miner_id
+    data["balance"] = amount_rtc
+    data["balance_rtc"] = amount_rtc
+    return data
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -120,24 +234,94 @@ def rustchain_epoch() -> dict:
 
 @mcp.tool()
 def rustchain_miners() -> dict:
-    """List all active RustChain miners with hardware details.
+    """List a bounded first page of active RustChain miners.
 
-    Returns each miner's wallet address, hardware type (G4, G5,
+    Returns each page miner's wallet address, hardware type (G4, G5,
     POWER8, Apple Silicon, modern x86_64), antiquity multiplier,
     and last attestation time. Vintage hardware earns higher
-    multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x).
+    multipliers (G4=2.5x, G5=2.0x, Apple Silicon=1.2x). total_miners
+    is included only when supplied by node pagination metadata.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/api/miners")
+    page_limit = 20
+    r = get_client().get(
+        f"{RUSTCHAIN_NODE}/api/miners",
+        params={"limit": page_limit, "offset": 0},
+    )
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError:
         return {"error": _handle_api_error(r), "status": "error"}
     data = r.json()
     miners = data if isinstance(data, list) else data.get("miners", [])
+    page = miners[:page_limit]
+    total = pagination_total(data) if isinstance(data, dict) else None
+    result = {
+        "miners": page,
+        "page_count": len(page),
+        "page_limit": page_limit,
+        "page_offset": 0,
+        "total_known": total is not None,
+    }
+    if total is not None:
+        result["total_miners"] = total
+    if isinstance(data, dict) and isinstance(data.get("pagination"), dict):
+        result["pagination"] = data["pagination"]
+    result["note"] = (
+        f"Showing {len(page)} of {total} miners"
+        if total is not None and total > len(page)
+        else None
+    )
+    return result
+
+
+@mcp.tool()
+def rustchain_events(
+    after_cursor: str | int = "0",
+    limit: int = 50,
+    wait_seconds: float = 0.0,
+) -> dict:
+    """Read a bounded batch of RustChain health, epoch, and miner events.
+
+    This is a cursor-based batch/long-poll MCP tool, not native MCP tool
+    streaming. One call does not emit partial miner results. For progressive
+    consumption, pass the returned next_cursor into another call. A positive
+    wait_seconds waits for a newer event, bounded by
+    RUSTCHAIN_EVENT_LONG_POLL_MAX (30 seconds by default).
+
+    Args:
+        after_cursor: Return events newer than this generation-qualified cursor.
+        limit: Maximum events to return (default 50, clamped to configured max).
+        wait_seconds: Seconds to wait when no newer event exists (default 0).
+
+    Returns normalized read-only state changes plus next_cursor, has_more,
+    cursor_expired, and cursor_reset. cursor_expired means retained history was
+    evicted. cursor_reset means the cursor belongs to an earlier process
+    generation (or is a legacy integer), so retained snapshots are replayed.
+    """
+    try:
+        relay = get_event_relay()
+        applied_limit = (
+            min(limit, relay.config.max_batch_size)
+            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+            else limit
+        )
+        batch = relay.get_batch(after_cursor, applied_limit, wait_seconds)
+    except RelayInputError as exc:
+        return {
+            "error": {
+                "code": "INVALID_EVENT_CURSOR_REQUEST",
+                "message": str(exc),
+                "retryable": False,
+            },
+            "ok": False,
+        }
     return {
-        "total_miners": len(miners),
-        "miners": miners[:20],  # Limit to avoid token overflow
-        "note": f"Showing first 20 of {len(miners)} miners" if len(miners) > 20 else None,
+        "delivery": "bounded_batch_or_long_poll",
+        "limit": applied_limit,
+        "limit_clamped": applied_limit != limit,
+        "native_mcp_streaming": False,
+        "ok": True,
+        **batch,
     }
 
 
@@ -169,13 +353,10 @@ def rustchain_balance(wallet_id: str) -> dict:
                    Examples: "dual-g4-125", "sophia-nas-c4130",
                    or an RTC address like "RTCa1b2c3d4..."
 
-    Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
+    Returns canonical amount_rtc/miner_id plus compatibility aliases balance,
+    balance_rtc, and wallet_id. 1 RTC = $0.10 USD reference rate.
     """
-    # Bypass any potential local caching by forcing a fresh network request
-    # and adding a timestamp to the query if the server supports it.
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}", params={"_ts": int(time.time() * 1000)})
-    r.raise_for_status()
-    return r.json()
+    return _get_rustchain_balance(wallet_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -222,9 +403,7 @@ def wallet_balance(wallet_id: str) -> dict:
     wallet = rustchain_crypto.load_wallet(wallet_id)
     address = wallet["address"] if wallet else wallet_id
 
-    r = get_client().get(f"{RUSTCHAIN_NODE}/balance/{address}")
-    r.raise_for_status()
-    return r.json()
+    return _get_rustchain_balance(address)
 
 
 @mcp.tool()
@@ -1144,17 +1323,15 @@ def contributor_lookup(username: str) -> dict:
         "note": f"Showing 10 of {len(merged_prs)}" if len(merged_prs) > 10 else None,
     }
 
-    # Try to look up RTC balance by common wallet naming conventions
+    # Try to look up RTC balance by common wallet naming conventions.
     wallet_ids_to_try = [username, f"rtc-{username}", username.lower()]
     for wallet_id in wallet_ids_to_try:
         try:
-            r = client.get(f"{RUSTCHAIN_NODE}/balance/{wallet_id}")
-            if r.status_code == 200:
-                balance_data = r.json()
-                if balance_data.get("balance_rtc", 0) > 0 or balance_data.get("amount_i64", 0) > 0:
-                    result["rtc_balance"] = balance_data
-                    result["wallet_id"] = wallet_id
-                    break
+            balance_data = _get_rustchain_balance(wallet_id, client)
+            if balance_data.get("amount_rtc", 0) > 0:
+                result["rtc_balance"] = balance_data
+                result["wallet_id"] = wallet_id
+                break
         except Exception:
             pass
 

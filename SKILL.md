@@ -14,9 +14,8 @@ This skill allows Claude Code to interact with the RustChain blockchain, monitor
    ```json
    {
      "mcpServers": {
-       "rustchain": {
-         "command": "rustchain-mcp",
-         "args": ["--api-key", "your-api-key"]
+      "rustchain": {
+         "command": "rustchain-mcp"
        }
      }
    }
@@ -35,6 +34,13 @@ For managing an agent's financial state on-chain:
 - **Initialization:** Use `wallet_create` to generate a new RTC wallet.
 - **Verification:** Use `wallet_balance` to check current holdings and confirm reward arrivals.
 - **Listing:** Use `wallet_list` to manage multiple agent personas.
+
+### 3. Progressive Network Monitoring
+Use `rustchain_events` to consume bounded health, epoch, and miner change
+batches. Save `next_cursor`, request again with that value, and use a positive
+`wait_seconds` only when a bounded long poll is useful. This MCP tool does not
+stream partial miners from one call and does not claim native MCP tool streaming.
+The separate `rustchain-event-relay` command provides SSE to non-MCP consumers.
 
 ###  la-standard: Proof-of-Delivery Only
 This skill follows the la-standard for agent deliverables.

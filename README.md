@@ -38,6 +38,15 @@ RustChain supplies the RTC blockchain and Proof-of-Antiquity value rail, BoTTube
 
 Wallet seed phrases are encrypted locally and not returned in tool responses; failed upstream lookups should return structured errors instead of fake zero balances.
 
+### Does rustchain-mcp stream partial miner results? (#231)
+
+No. `rustchain_events` is a standard MCP tool that returns a bounded JSON batch,
+optionally after a bounded long poll. It does not claim native MCP tool streaming,
+and one call does not emit miners one at a time. Clients consume progressive
+results by calling the tool again with `next_cursor`. The separate
+`rustchain-event-relay` process exposes SSE for event consumers; that SSE endpoint
+is not an MCP transport. See [Event Relay and Progressive Results](docs/event-relay.md).
+
 ## What Can Agents Do?
 
 ### RustChain (Blockchain)
@@ -45,6 +54,7 @@ Wallet seed phrases are encrypted locally and not returned in tool responses; fa
 - **Check balances** — Query RTC token balances for any wallet
 - **View miners** — See active miners with hardware types and antiquity multipliers
 - **Monitor epochs** — Track current epoch, rewards, and enrollment
+- **Follow state changes** — Consume cursor-based health, epoch, and miner events
 - **Transfer RTC** — Send signed RTC token transfers between wallets
 - **Browse bounties** — Find open bounties to earn RTC (23,300+ RTC paid out)
 
@@ -85,8 +95,7 @@ Add to your Claude config file (`~/Library/Application Support/Claude/claude_des
 {
   "mcpServers": {
     "rustchain": {
-      "command": "rustchain-mcp",
-      "args": ["--api-key", "your-api-key"]
+      "command": "rustchain-mcp"
     }
   }
 }
@@ -105,6 +114,20 @@ from rustchain_mcp import mcp
 #   RUSTCHAIN_NODE, BOTTUBE_URL, BEACON_URL, RUSTCHAIN_TIMEOUT
 mcp.run()  # serves over stdio by default
 ```
+
+### Standalone Event Relay
+
+Run the separate loopback-only SSE service when a non-MCP event consumer needs a
+continuous feed:
+
+```bash
+rustchain-event-relay
+curl -N http://127.0.0.1:8766/events
+```
+
+Running `rustchain-mcp` does not open this HTTP listener. Full configuration,
+cursor semantics, and security notes are in
+[docs/event-relay.md](docs/event-relay.md).
 
 ## Prerequisites
 
@@ -126,12 +149,21 @@ mcp.run()  # serves over stdio by default
 ### RustChain (8 tools)
 - `rustchain_health` — Check node health status
 - `rustchain_epoch` — Get current epoch information
-- `rustchain_miners` — List active miners with hardware details
+- `rustchain_miners` — List a bounded miner page with node-provided total metadata
 - `rustchain_create_wallet` — Create a new RTC wallet (zero friction)
 - `rustchain_balance` — Check RTC token balance for a wallet
 - `rustchain_stats` — Get network-wide statistics
 - `rustchain_lottery_eligibility` — Check miner lottery eligibility
 - `rustchain_transfer_signed` — Transfer RTC with Ed25519 signature
+
+### RustChain Events (1 tool)
+- `rustchain_events` — Read a bounded cursor batch or wait up to the configured long-poll limit
+
+This tool returns `native_mcp_streaming: false`. Continue from `next_cursor` for
+progressive results; a `cursor_expired: true` response means older in-memory
+events were evicted and the batch starts at `oldest_cursor`. Cursors include a
+per-process generation; `cursor_reset: true` safely replays retained snapshots
+after a relay restart or legacy numeric cursor.
 
 ### Ecosystem & Discovery (5 tools) — NEW in v0.5.0
 - `legend_of_elya_info` — Info about the N64-style LLM adventure game (stars, architecture, bounties)
@@ -175,7 +207,7 @@ print(f"New wallet: {result['address']}")
 # Check the balance
 balance = wallet_balance(wallet_id="MyAgent")
 # Balance includes wallet_id and amount fields
-print(f"Balance: {balance['rtc']} RTC")
+print(f"Balance: {balance['amount_rtc']} RTC")
 ```
 
 ### Find and Complete Bounties
@@ -227,7 +259,7 @@ print(f"Total wallets: {wallets['total_wallets']}")
 
 # Check balance
 balance = wallet_balance(wallet_id="my-trading-bot")
-print(f"Balance: {balance['rtc']} RTC")
+print(f"Balance: {balance['amount_rtc']} RTC")
 
 # Transfer RTC (signed with Ed25519)
 result = wallet_transfer_signed(
@@ -265,32 +297,29 @@ os.environ["RUSTCHAIN_TIMEOUT"] = "60"  # Set 60s timeout for slow network calls
 
 ## Configuration Options
 
-### Environment Variables
+The MCP server reads configuration from environment variables. It does not
+parse `--api-key` or `--network` command-line arguments.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RUSTCHAIN_NODE` | `https://50.28.86.131` | RustChain node base URL |
+| `RUSTCHAIN_TIMEOUT` | `30` | Timeout for regular MCP HTTP tools |
+| `RUSTCHAIN_TLS_VERIFY` | `true` | Set false only for a trusted self-signed test node |
+| `RUSTCHAIN_CA_BUNDLE` | unset | CA bundle path; takes precedence over TLS verify |
+| `BOTTUBE_URL` | `https://bottube.ai` | BoTTube base URL |
+| `BEACON_URL` | `https://rustchain.org/beacon` | Beacon base URL |
+
+The event poller has separate, tighter timeout and memory controls. Common
+settings are shown below; [docs/event-relay.md](docs/event-relay.md) lists every
+event and SSE variable.
 
 ```bash
-export RUSTCHAIN_API_KEY="your-api-key"
-export RUSTCHAIN_NETWORK="mainnet"  # or "testnet"
-export BOTTUBE_UPLOAD_LIMIT="100MB"
-export BEACON_MESSAGE_RETENTION="30d"
-```
-
-### Advanced Configuration
-
-```json
-{
-  "mcpServers": {
-    "rustchain": {
-      "command": "rustchain-mcp",
-      "args": [
-        "--api-key", "your-api-key",
-        "--network", "mainnet",
-        "--wallet-dir", "./wallets",
-        "--auto-backup", "true",
-        "--beacon-channels", "general,bounties,collaboration"
-      ]
-    }
-  }
-}
+export RUSTCHAIN_EVENT_POLL_INTERVAL=5
+export RUSTCHAIN_EVENT_REQUEST_TIMEOUT=5
+export RUSTCHAIN_EVENT_BUFFER_SIZE=256
+export RUSTCHAIN_EVENT_BATCH_LIMIT=100
+export RUSTCHAIN_EVENT_LONG_POLL_MAX=30
+export RUSTCHAIN_EVENT_MINERS_LIMIT=100
 ```
 
 ## Security
@@ -303,6 +332,20 @@ export BEACON_MESSAGE_RETENTION="30d"
 - ⚡ **Rate limiting** prevents abuse and ensures fair usage
 - 🎯 **Scoped permissions** limit agent actions to authorized operations
 - 🚫 **No seed phrase exposure**: Seed phrases are encrypted and never returned in tool responses
+
+### Event Relay Security
+
+- The poller makes `GET` requests only to `/health`, `/epoch`, and a bounded
+  first page of `/api/miners`; node-provided pagination totals are preserved.
+- The standalone server binds to `127.0.0.1` by default and exposes only
+  `GET /events` and `GET /healthz`; POST requests are rejected.
+- A non-loopback bind requires both `--allow-remote` and a bearer token supplied
+  through `RUSTCHAIN_EVENT_TOKEN` (minimum 16 characters).
+- Event history, response bodies, batch sizes, long polls, and accepted HTTP
+  connections all have configured bounds. History is process-local; generated
+  cursor namespaces make restarts explicit instead of reusing numeric IDs.
+- TLS verification is enabled by default, redirects are not followed, and event
+  JSON uses a deterministic canonical serialization.
 
 ## Troubleshooting
 
@@ -345,7 +388,7 @@ Recommended shape:
     "retryable": true,
     "source": "rustchain",
     "details": {
-      "endpoint": "/balance",
+      "endpoint": "/wallet/balance",
       "wallet_id": "my-agent"
     }
   }
@@ -360,7 +403,7 @@ Common error codes:
 - `NON_JSON_RESPONSE`: the upstream endpoint returned HTML, plain text, or an
   otherwise non-JSON body.
 - `MISSING_EXPECTED_FIELD`: the response was JSON but did not include the field
-  needed by the tool, such as `balance_rtc`, `miners`, `agents`, or `videos`.
+  needed by the tool, such as `amount_rtc`, `miners`, `agents`, or `videos`.
 - `NODE_UNAVAILABLE`: the RustChain node or relay could not be reached, returned
   a 5xx response, or failed a health check.
 - `RATE_LIMITED`: the upstream service returned a rate-limit response. Mark this
@@ -371,7 +414,9 @@ Common error codes:
 Client guidance:
 
 - A successful zero balance should be explicit, for example
-  `{"ok": true, "balance_rtc": 0}`.
+  `{"amount_rtc": 0, "miner_id": "my-agent"}`.
+- Successful balance responses also expose the compatibility aliases `balance`,
+  `balance_rtc`, and `wallet_id`, all derived from canonical fields.
 - A failed balance lookup should never be collapsed to `0 RTC`; return an error
   object so the agent can retry, warn the user, or stop the task.
 - Preserve the upstream status code and endpoint in `details` when available,
