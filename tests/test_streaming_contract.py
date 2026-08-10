@@ -9,14 +9,12 @@ Run:  python -m pytest tests/test_streaming_contract.py -v   (no network)
 
 from __future__ import annotations
 
-import importlib
-import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-import rustchain_mcp.server as server
+from rustchain_mcp import server
 
 # ── helpers ─────────────────────────────────────────────────────
 
