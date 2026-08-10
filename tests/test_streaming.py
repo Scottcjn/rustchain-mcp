@@ -26,8 +26,8 @@ def test_timeout_config_respected():
 
 def test_timeout_returns_error():
     """A timeout during a tool call returns an MCP error, not a hang."""
-    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE
-    client = _make_client()
+    from rustchain_mcp.server import get_client, RUSTCHAIN_NODE
+    client = get_client()
 
     with patch.object(client, "get", side_effect=httpx.TimeoutException("timed out")):
         with pytest.raises(httpx.TimeoutException):
@@ -36,8 +36,8 @@ def test_timeout_returns_error():
 
 def test_connection_refused_returns_error():
     """Connection refused during a read tool returns a meaningful error."""
-    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE
-    client = _make_client()
+    from rustchain_mcp.server import get_client, RUSTCHAIN_NODE
+    client = get_client()
 
     with patch.object(client, "get", side_effect=httpx.ConnectError("Connection refused")):
         with pytest.raises(httpx.ConnectError):
@@ -46,8 +46,8 @@ def test_connection_refused_returns_error():
 
 def test_http_404_formatted():
     """HTTP 404 from a tool returns a clear error, not a cryptic trace."""
-    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE
-    client = _make_client()
+    from rustchain_mcp.server import get_client, RUSTCHAIN_NODE
+    client = get_client()
 
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 404
@@ -64,8 +64,8 @@ def test_http_404_formatted():
 
 def test_cancellation_safety():
     """Cancelling a tool does not leave a pending operation on the node."""
-    from rustchain_mcp.server import _make_client, RUSTCHAIN_NODE
-    client = _make_client()
+    from rustchain_mcp.server import get_client, RUSTCHAIN_NODE
+    client = get_client()
 
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
