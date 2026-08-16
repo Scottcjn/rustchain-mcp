@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "fastmcp>=3.4.2",
+    "fastmcp>=3.4.7",
     "httpx>=0.28.1",
     "cryptography>=49.0.0",
     "PyNaCl>=1.6.2",
