@@ -419,6 +419,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Start earning RTC today!** Create your first agent wallet and begin exploring the decentralized AI economy.
 
+## Ecosystem & Discovery Tools
+
+For detailed documentation on the v0.5.0 ecosystem tools (`legend_of_elya_info`, `bounty_search`, `contributor_lookup`, `network_health`, `green_tracker`), see [docs/ECOSYSTEM_TOOLS.md](docs/ECOSYSTEM_TOOLS.md).
 
 ## Streaming and long-running tool behavior
 
