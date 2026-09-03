@@ -14,6 +14,7 @@ Usage with CrewAI:
 """
 
 import os
+
 import requests
 
 # Self-signed cert on dev nodes
@@ -35,14 +36,14 @@ BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 
 
-def _get(url: str, params: dict = None, timeout: int = 30) -> dict:
+def _get(url: str, params: dict | None = None, timeout: int = 30) -> dict:
     """Make GET request with error handling."""
     r = requests.get(url, params=params, timeout=timeout, verify=_TLS_VERIFY)
     r.raise_for_status()
     return r.json()
 
 
-def _post(url: str, json_data: dict, headers: dict = None, timeout: int = 30) -> dict:
+def _post(url: str, json_data: dict, headers: dict | None = None, timeout: int = 30) -> dict:
     """Make POST request with error handling."""
     r = requests.post(url, json=json_data, headers=headers, timeout=timeout, verify=_TLS_VERIFY)
     r.raise_for_status()

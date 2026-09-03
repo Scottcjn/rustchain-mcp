@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RustChain + BoTTube + Beacon MCP Server
 ========================================
@@ -77,7 +76,7 @@ def _handle_api_error(response: httpx.Response) -> str:
     try:
         error_data = response.json()
         return error_data.get("error") or error_data.get("message") or f"HTTP {response.status_code}"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return f"HTTP {response.status_code}: {response.text[:200]}"
 
 
@@ -459,7 +458,7 @@ def rustchain_transfer_signed(
     signature: str,
     public_key: str,
     memo: str = "",
-    nonce: int = None,
+    nonce: int | None = None,
 ) -> dict:
     """Transfer RTC tokens between wallets (requires Ed25519 signature).
 
@@ -903,7 +902,7 @@ def beacon_network_stats() -> dict:
         h = get_client().get(f"{BEACON_URL}/api/health")
         h.raise_for_status()
         stats["health"] = h.json()
-    except Exception:
+    except Exception:  # noqa: BLE001
         stats["health"] = {"ok": "unknown"}
 
     return stats
@@ -993,7 +992,7 @@ def legend_of_elya_info() -> dict:
             info["open_issues"] = gh.get("open_issues_count", 0)
         else:
             info["github_stars"] = "48+"
-    except Exception:
+    except Exception:  # noqa: BLE001
         info["github_stars"] = "48+"
 
     return info
@@ -1051,7 +1050,7 @@ def bounty_search(
             )
             r.raise_for_status()
             items = r.json().get("items", [])
-        except Exception:
+        except Exception:  # noqa: BLE001
             items = []
 
         for item in items:
@@ -1135,7 +1134,7 @@ def contributor_lookup(username: str) -> dict:
                         "repo": repo_name,
                         "merged_at": item.get("closed_at", ""),
                     })
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             pass
 
     result["merged_prs"] = {
@@ -1155,7 +1154,7 @@ def contributor_lookup(username: str) -> dict:
                     result["rtc_balance"] = balance_data
                     result["wallet_id"] = wallet_id
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             pass
 
     if "rtc_balance" not in result:
@@ -1206,7 +1205,7 @@ def network_health() -> dict:
             else:
                 status["healthy"] = False
                 status["error"] = f"HTTP {r.status_code}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             status["healthy"] = False
             status["error"] = str(e)[:120]
 
@@ -1243,7 +1242,7 @@ def green_tracker() -> dict:
         r = client.get(PRESERVED_URL, timeout=15)
         if r.status_code == 200:
             machines = _parse_preserved_html(r.text)
-    except Exception:
+    except Exception:  # noqa: BLE001,S110
         pass
 
     # Fall back to known fleet if parsing failed or returned nothing

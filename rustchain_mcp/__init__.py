@@ -9,4 +9,4 @@ __version__ = "0.4.0"
 # (see [project.scripts] in pyproject.toml -> rustchain_mcp.server:mcp.run).
 from .server import mcp
 
-__all__ = ["mcp", "__version__"]
+__all__ = ["__version__", "mcp"]

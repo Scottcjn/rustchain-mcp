@@ -24,7 +24,6 @@ import pytest
 
 from rustchain_mcp import rustchain_crypto
 
-
 # ═══════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════
@@ -212,7 +211,7 @@ class TestWalletExport:
         import base64
         try:
             base64.b64decode(encrypted)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pytest.fail("Export is not valid base64")
 
 
@@ -447,7 +446,7 @@ class TestCryptographicFunctions:
         """Test that derived address has correct format."""
         # Generate a keypair
         seed = rustchain_crypto._mnemonic_to_seed("test seed phrase for address derivation")
-        private_key, public_key = rustchain_crypto._seed_to_ed25519_keypair(seed)
+        _private_key, public_key = rustchain_crypto._seed_to_ed25519_keypair(seed)
         
         address = rustchain_crypto._derive_wallet_address(public_key)
         
@@ -486,7 +485,7 @@ class TestCryptographicFunctions:
             decrypted = rustchain_crypto._decrypt_data(encrypted, "wrong-password")
             # If it doesn't raise, the data should be corrupted
             assert decrypted != data
-        except Exception:
+        except Exception:  # noqa: BLE001,S110
             # Exception is also acceptable behavior
             pass
 
@@ -634,7 +633,7 @@ class TestMCPServerWalletTools:
 
     def test_mcp_wallet_balance_with_mock(self, temp_keystore):
         """Test wallet_balance MCP tool with mocked HTTP response."""
-        from rustchain_mcp.server import wallet_create, wallet_balance
+        from rustchain_mcp.server import wallet_balance, wallet_create
 
         created = wallet_create(agent_name="balance-agent", password="")
 

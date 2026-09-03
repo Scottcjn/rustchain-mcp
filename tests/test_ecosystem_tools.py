@@ -18,7 +18,6 @@ import pytest
 
 from rustchain_mcp import server
 
-
 # ═══════════════════════════════════════════════════════════════
 # Test Helpers
 # ═══════════════════════════════════════════════════════════════
@@ -36,7 +35,7 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
+            raise Exception(f"HTTP {self.status_code}")  # noqa: TRY002
 
 
 class FakeClient:

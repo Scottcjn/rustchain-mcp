@@ -1,8 +1,8 @@
 """
 Mock Moltbook service for testing.
 """
-from typing import Dict, Any, List
 import json
+from typing import Any
 
 
 class MockMoltbookService:
@@ -26,7 +26,7 @@ class MockMoltbookService:
         self.submolts = ["rustchain", "bottube", "a2a", "test"]
     
     def create_post(self, title: str, content: str, submolt: str, 
-                   api_key: str = "") -> Dict[str, Any]:
+                   api_key: str = "") -> dict[str, Any]:
         """Mock POST /api/v1/posts endpoint."""
         
         # Check API key
@@ -70,7 +70,7 @@ class MockMoltbookService:
             "url": f"https://moltbook.com/m/{submolt}/{post_id}"
         }, 201
     
-    def get_posts(self, submolt: str = None, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_posts(self, submolt: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         """Mock GET /api/v1/posts endpoint."""
         posts = self.posts
         
@@ -88,7 +88,7 @@ class MockMoltbookService:
 mock_moltbook = MockMoltbookService()
 
 
-def create_moltbook_response(status_code: int = 200, **kwargs) -> Dict[str, Any]:
+def create_moltbook_response(status_code: int = 200, **kwargs) -> dict[str, Any]:
     """Create response data for Moltbook API."""
     response_data = kwargs.get("response_data", {})
     
@@ -107,6 +107,7 @@ def create_moltbook_response(status_code: int = 200, **kwargs) -> Dict[str, Any]
 def setup_moltbook_mocks(monkeypatch, mock_moltbook_service: MockMoltbookService = None):
     """Setup monkeypatch mocks for Moltbook API calls."""
     from unittest.mock import Mock
+
     import evangelist_agent
     
     if mock_moltbook_service is None:
@@ -147,7 +148,7 @@ def setup_moltbook_mocks(monkeypatch, mock_moltbook_service: MockMoltbookService
     return mock_moltbook_service
 
 
-def create_moltbook_error_response(error_type: str = "auth") -> Dict[str, Any]:
+def create_moltbook_error_response(error_type: str = "auth") -> dict[str, Any]:
     """Create error responses for Moltbook API testing."""
     errors = {
         "auth": {"error": "Missing authorization"},

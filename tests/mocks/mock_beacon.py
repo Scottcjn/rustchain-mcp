@@ -1,8 +1,8 @@
 """
 Mock Beacon Atlas service for testing.
 """
-from typing import Optional, Dict, Any
 import json
+from typing import Any
 
 
 class MockBeaconService:
@@ -37,7 +37,7 @@ class MockBeaconService:
         ]
         self.pings = []
     
-    def get_agents(self, limit: int = 50) -> Dict[str, Any]:
+    def get_agents(self, limit: int = 50) -> dict[str, Any]:
         """Mock GET /atlas/agents endpoint."""
         return {
             "agents": self.agents[:limit],
@@ -45,7 +45,7 @@ class MockBeaconService:
             "limit": limit
         }
     
-    def post_ping(self, ping_data: Dict[str, Any]) -> Dict[str, Any]:
+    def post_ping(self, ping_data: dict[str, Any]) -> dict[str, Any]:
         """Mock POST /ping endpoint."""
         ping_id = f"ping-{len(self.pings) + 1}"
         ping_record = {
@@ -94,9 +94,10 @@ def create_beacon_response(status_code: int = 200, **kwargs):
     return mock_response
 
 
-def setup_beacon_mocks(monkeypatch, mock_beacon_service: Optional[MockBeaconService] = None):
+def setup_beacon_mocks(monkeypatch, mock_beacon_service: MockBeaconService | None = None):
     """Setup monkeypatch mocks for Beacon API calls."""
     from unittest.mock import Mock
+
     import evangelist_agent
     
     if mock_beacon_service is None:

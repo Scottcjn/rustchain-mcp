@@ -26,8 +26,7 @@ from unittest import mock
 
 import pytest
 
-from rustchain_mcp import rustchain_crypto
-from rustchain_mcp import server
+from rustchain_mcp import rustchain_crypto, server
 
 # The @mcp.tool() decorator wraps these as FunctionTool; .fn is the raw function.
 _wallet_transfer_signed = server.wallet_transfer_signed.fn

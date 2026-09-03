@@ -2,6 +2,7 @@
 Unit tests for evangelist agent actions and workflows.
 """
 from unittest.mock import Mock, patch
+
 import evangelist_agent
 from tests.mocks.mock_beacon import MockBeaconService, setup_beacon_mocks
 from tests.mocks.mock_bottube import MockBoTTubeService, setup_bottube_mocks

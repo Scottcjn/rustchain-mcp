@@ -16,8 +16,8 @@ Usage with CrewAI:
 """
 
 import os
+
 import requests
-from typing import Type
 from pydantic import BaseModel, Field
 
 try:
@@ -35,7 +35,7 @@ BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 
 
-def _get(url: str, params: dict = None, timeout: int = 30) -> dict:
+def _get(url: str, params: dict | None = None, timeout: int = 30) -> dict:
     """Make GET request with error handling."""
     try:
         r = requests.get(url, params=params, timeout=timeout, verify=_TLS_VERIFY)
@@ -45,7 +45,7 @@ def _get(url: str, params: dict = None, timeout: int = 30) -> dict:
         return {"error": str(e)}
 
 
-def _post(url: str, json_data: dict, headers: dict = None, timeout: int = 30) -> dict:
+def _post(url: str, json_data: dict, headers: dict | None = None, timeout: int = 30) -> dict:
     """Make POST request with error handling."""
     try:
         r = requests.post(url, json=json_data, headers=headers, timeout=timeout, verify=_TLS_VERIFY)
@@ -69,7 +69,7 @@ class RustChainCheckBalance(BaseTool):
         "Check RTC token balance for a RustChain wallet. "
         "Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate."
     )
-    args_schema: Type[BaseModel] = CheckBalanceInput
+    args_schema: type[BaseModel] = CheckBalanceInput
 
     def _run(self, wallet_id: str) -> str:
         data = _get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
@@ -91,7 +91,7 @@ class RustChainListBounties(BaseTool):
         "List available RustChain bounties for earning RTC tokens. "
         "Browse and claim bounties at https://github.com/Scottcjn/rustchain-bounties"
     )
-    args_schema: Type[BaseModel] = ListBountiesInput
+    args_schema: type[BaseModel] = ListBountiesInput
 
     def _run(self, limit: int = 10) -> str:
         return (
@@ -182,7 +182,7 @@ class RustChainBoTTubeSearch(BaseTool):
         "Search for videos on BoTTube AI video platform. "
         "BoTTube.ai is where AI agents create and share video content."
     )
-    args_schema: Type[BaseModel] = BoTTubeSearchInput
+    args_schema: type[BaseModel] = BoTTubeSearchInput
 
     def _run(self, query: str) -> str:
         data = _get(f"{BOTTUBE_URL}/api/v1/videos/search", params={"q": query})
@@ -247,7 +247,7 @@ class RustChainBeaconDiscover(BaseTool):
         "Discover AI agents on the Beacon network. Filter by capability "
         "(coding, research, creative, video-production, blockchain, etc.)."
     )
-    args_schema: Type[BaseModel] = BeaconDiscoverInput
+    args_schema: type[BaseModel] = BeaconDiscoverInput
 
     def _run(self, capability: str = "") -> str:
         data = _get(f"{BEACON_URL}/api/agents")
@@ -307,7 +307,7 @@ class RustChainBeaconChat(BaseTool):
     description: str = (
         "Chat with a native Beacon agent (Sophia Elya, Boris Volkov, DeepSeeker, etc.)."
     )
-    args_schema: Type[BaseModel] = BeaconChatInput
+    args_schema: type[BaseModel] = BeaconChatInput
 
     def _run(self, agent_id: str, message: str) -> str:
         data = _post(
