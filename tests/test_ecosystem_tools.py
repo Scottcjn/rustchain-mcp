@@ -248,7 +248,7 @@ class TestContributorLookup:
         ]
         routes = {
             "api.github.com/search/issues": FakeResponse(200, {"items": items}),
-            "/balance": FakeResponse(200, {"balance_rtc": 0}),
+            "/wallet/balance": FakeResponse(200, {"amount_rtc": 0}),
         }
         with _patch_client(routes):
             result = server.contributor_lookup("testuser")
@@ -260,18 +260,18 @@ class TestContributorLookup:
     def test_finds_rtc_balance_by_username(self):
         routes = {
             "api.github.com/search/issues": FakeResponse(200, {"items": []}),
-            "/balance": FakeResponse(200, {"balance_rtc": 42.5, "amount_i64": 42500000}),
+            "/wallet/balance": FakeResponse(200, {"amount_rtc": 42.5}),
         }
         with _patch_client(routes):
             result = server.contributor_lookup("createkr")
 
         assert result["rtc_balance"] is not None
-        assert result["rtc_balance"]["balance_rtc"] == 42.5
+        assert result["rtc_balance"]["amount_rtc"] == 42.5
 
     def test_no_wallet_found(self):
         routes = {
             "api.github.com/search/issues": FakeResponse(200, {"items": []}),
-            "/balance": FakeResponse(200, {"balance_rtc": 0, "amount_i64": 0}),
+            "/wallet/balance": FakeResponse(200, {"amount_rtc": 0}),
         }
         with _patch_client(routes):
             result = server.contributor_lookup("newcontributor")

@@ -36,6 +36,7 @@ Documentation = "https://rustchain.org/docs"
 
 [project.scripts]
 rustchain-mcp = "rustchain_mcp.server:mcp.run"
+rustchain-event-relay = "rustchain_mcp.events:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rustchain_mcp"]

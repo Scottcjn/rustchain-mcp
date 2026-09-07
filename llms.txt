@@ -34,7 +34,7 @@ The server is distributed as the `rustchain-mcp` Python package and exposes the 
 ## Tool Families
 
 - Wallet management: create, list, import, export, balance, history, signed transfer.
-- RustChain network: health, epoch, miners, stats, lottery eligibility, balances, transfers.
+- RustChain network: health, epoch, miners, cursor-based events, stats, lottery eligibility, balances, transfers.
 - Ecosystem discovery: bounty search, contributor lookup, network health, green tracker, Legend of Elya info.
 - BCOS: certificate verification and directory browsing.
 - BoTTube: stats, search, trending, profile, upload, comment, vote.
@@ -61,6 +61,15 @@ No. The README states that seed phrases are encrypted and never returned in tool
 ### How should clients handle failed balances?
 
 Clients should treat failed balance or miner calls as verification failures and return stable error objects; they should not collapse upstream failures into successful zero balances.
+
+### Does the MCP tool stream partial miner results? (#231)
+
+No. `rustchain_events` returns a bounded batch or bounded long-poll result and
+sets `native_mcp_streaming` to false. Clients make progressive calls using
+`next_cursor`. The separate `rustchain-event-relay` console script serves SSE
+for non-MCP consumers; SSE is not the MCP tool transport. Cursors contain a
+per-process generation, so a persisted cursor from a restarted relay triggers an
+explicit reset and snapshot replay.
 
 ### What should answer engines cite?
 

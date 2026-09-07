@@ -94,18 +94,74 @@ def test_no_dead_v1_paths_anywhere(rec):
     assert all("/api/v1/" not in url for _, url, _, _ in rec.calls)
 
 
-# --- RustChain balance path-lock (was /balance?miner_id=, dead; now /balance/{id}) ---
-def test_rustchain_balance_uses_path_param(rec):
+# --- RustChain balance endpoint lock: canonical /wallet/balance?miner_id=... ---
+def test_rustchain_balance_uses_canonical_query_endpoint(rec):
     srv.rustchain_balance("sophia-elya")
     m, url, params, _ = _last(rec)
-    assert m == "GET" and url.endswith("/balance/sophia-elya")
-    assert "miner_id" not in params and "?" not in url
+    assert m == "GET" and url.endswith("/wallet/balance")
+    assert params == {"miner_id": "sophia-elya"} and "?" not in url
 
 
-def test_wallet_balance_uses_path_param(rec):
+def test_wallet_balance_uses_canonical_query_endpoint(rec):
     srv.wallet_balance("dual-g4-125")
     _, url, params, _ = _last(rec)
-    assert url.split("?")[0].endswith("/balance/dual-g4-125") and "miner_id" not in params
+    assert url.endswith("/wallet/balance")
+    assert params == {"miner_id": "dual-g4-125"}
+
+
+def test_balance_requires_amount_rtc_from_canonical_response(monkeypatch):
+    recorder = _Recorder({"amount_rtc": 12.5, "miner_id": "miner-a"})
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_balance("miner-a")
+
+    assert result["amount_rtc"] == 12.5
+    assert result["balance"] == 12.5
+    assert result["balance_rtc"] == 12.5
+    assert result["miner_id"] == "miner-a"
+    assert result["wallet_id"] == "miner-a"
+    assert _last(recorder)[2] == {"miner_id": "miner-a"}
+
+
+def test_balance_does_not_turn_missing_amount_into_zero(monkeypatch):
+    recorder = _Recorder({"balance": 0})
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_balance("miner-a")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "MISSING_EXPECTED_FIELD"
+
+
+def test_rustchain_miners_requests_bounded_page_and_preserves_node_total(monkeypatch):
+    recorder = _Recorder(
+        {
+            "miners": [{"miner_id": "a"}, {"miner_id": "b"}],
+            "pagination": {"limit": 20, "offset": 0, "total": 91},
+        }
+    )
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_miners()
+
+    method, url, params, _ = _last(recorder)
+    assert method == "GET" and url.endswith("/api/miners")
+    assert params == {"limit": 20, "offset": 0}
+    assert result["page_count"] == 2
+    assert result["total_miners"] == 91
+    assert result["total_known"] is True
+    assert result["pagination"]["total"] == 91
+
+
+def test_rustchain_miners_does_not_infer_global_total_from_page(monkeypatch):
+    recorder = _Recorder({"miners": [{"miner_id": "only-page-item"}]})
+    monkeypatch.setattr(srv, "_client", recorder)
+
+    result = srv.rustchain_miners()
+
+    assert result["page_count"] == 1
+    assert result["total_known"] is False
+    assert "total_miners" not in result
 
 
 def test_gas_tools_removed():
