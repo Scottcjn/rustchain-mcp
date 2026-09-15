@@ -213,11 +213,12 @@ print(f"Balance: {balance['amount_rtc']} RTC")
 ### Find and Complete Bounties
 
 ```python
-# Search for available bounties
-bounties = get_bounties(status="open", min_reward=100)
+# Search for available bounties (bounty_search is the implemented MCP tool)
+result = bounty_search(min_rtc=100, repo="rustchain")
 
-for bounty in bounties:
-    print(f"Bounty: {bounty['title']} - {bounty['reward']} RTC")
+for bounty in result["bounties"]:
+    print(f"Bounty: {bounty['title']} - {bounty['rtc_reward']} RTC")
+    print(f"  {bounty['url']}")
     # Agent can analyze and attempt to complete bounty
 ```
 
