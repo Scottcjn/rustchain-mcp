@@ -98,7 +98,7 @@ class EventRelayConfig:
     miners_limit: int = 100
 
     @classmethod
-    def from_env(cls) -> "EventRelayConfig":
+    def from_env(cls) -> EventRelayConfig:
         config = cls(
             node_url=os.environ.get("RUSTCHAIN_NODE", cls.node_url),
             poll_interval=_env_float(
@@ -123,7 +123,7 @@ class EventRelayConfig:
         )
         return config.validated()
 
-    def validated(self) -> "EventRelayConfig":
+    def validated(self) -> EventRelayConfig:
         node_url = _validate_node_url(self.node_url)
         if not 0.05 <= self.poll_interval <= 3600:
             raise RelayInputError("poll_interval must be between 0.05 and 3600 seconds")
@@ -167,7 +167,7 @@ class SSEConfig:
     allow_remote: bool = False
 
     @classmethod
-    def from_env(cls) -> "SSEConfig":
+    def from_env(cls) -> SSEConfig:
         return cls(
             host=os.environ.get("RUSTCHAIN_EVENT_SSE_HOST", cls.host),
             port=_env_int("RUSTCHAIN_EVENT_SSE_PORT", cls.port),
@@ -183,7 +183,7 @@ class SSEConfig:
             in ("true", "1", "yes"),
         ).validated()
 
-    def validated(self) -> "SSEConfig":
+    def validated(self) -> SSEConfig:
         if not 0 <= self.port <= 65535:
             raise RelayInputError("port must be between 0 and 65535")
         if not 1 <= self.max_clients <= 1000:
@@ -633,39 +633,36 @@ class EventRelay:
         *,
         params: dict[str, int] | None = None,
     ) -> Any:
-        try:
-            with self._client.stream(
-                "GET",
-                f"{self.config.node_url}{path}",
-                headers={"Accept": "application/json"},
-                params=params,
-                timeout=self.config.request_timeout,
-            ) as response:
-                if response.status_code >= 400:
-                    code = (
-                        "RATE_LIMITED"
-                        if response.status_code == 429
-                        else "UPSTREAM_REJECTED"
+        with self._client.stream(
+            "GET",
+            f"{self.config.node_url}{path}",
+            headers={"Accept": "application/json"},
+            params=params,
+            timeout=self.config.request_timeout,
+        ) as response:
+            if response.status_code >= 400:
+                code = (
+                    "RATE_LIMITED"
+                    if response.status_code == 429
+                    else "UPSTREAM_REJECTED"
+                )
+                retryable = (
+                    response.status_code == 429 or response.status_code >= 500
+                )
+                if response.status_code >= 500:
+                    code = "NODE_UNAVAILABLE"
+                raise _PollFailure(
+                    _error_data(
+                        code, retryable=retryable, status_code=response.status_code
                     )
-                    retryable = (
-                        response.status_code == 429 or response.status_code >= 500
-                    )
-                    if response.status_code >= 500:
-                        code = "NODE_UNAVAILABLE"
+                )
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > self.config.max_response_bytes:
                     raise _PollFailure(
-                        _error_data(
-                            code, retryable=retryable, status_code=response.status_code
-                        )
+                        _error_data("RESPONSE_TOO_LARGE", retryable=False)
                     )
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) > self.config.max_response_bytes:
-                        raise _PollFailure(
-                            _error_data("RESPONSE_TOO_LARGE", retryable=False)
-                        )
-        except _PollFailure:
-            raise
 
         try:
             return json.loads(body.decode("utf-8"))
