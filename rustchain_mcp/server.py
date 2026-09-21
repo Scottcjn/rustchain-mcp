@@ -221,8 +221,10 @@ def rustchain_epoch() -> dict:
     """Get current RustChain epoch information.
 
     Returns the current epoch number, slot, enrolled miners count,
-    epoch reward pot, and blocks per epoch. Epochs are 600-second
-    intervals where miners earn RTC rewards.
+    epoch reward pot, blocks per epoch, and total_supply_rtc
+    (8,388,608 = 2^23, fixed). A slot is 600 seconds; an epoch is 144
+    slots (about 24 hours), at the end of which enrolled, attested
+    miners share the epoch pot.
     """
     r = get_client().get(f"{RUSTCHAIN_NODE}/epoch")
     try:
@@ -354,7 +356,8 @@ def rustchain_balance(wallet_id: str) -> dict:
                    or an RTC address like "RTCa1b2c3d4..."
 
     Returns canonical amount_rtc/miner_id plus compatibility aliases balance,
-    balance_rtc, and wallet_id. 1 RTC = $0.10 USD reference rate.
+    balance_rtc, and wallet_id. Amounts are in RTC only; no fiat conversion
+    is returned. RTC is not sold or listed and has no market price.
     """
     return _get_rustchain_balance(wallet_id)
 
@@ -397,7 +400,8 @@ def wallet_balance(wallet_id: str) -> dict:
     Args:
         wallet_id: The wallet ID to check (e.g., "my-agent", "trading-bot")
 
-    Returns balance in RTC tokens and USD equivalent ($0.10/RTC).
+    Returns the balance in RTC (amount_rtc plus compatibility aliases).
+    No fiat equivalent is returned: RTC is not sold or listed.
     """
     # First check if wallet exists in local keystore
     wallet = rustchain_crypto.load_wallet(wallet_id)
@@ -1094,12 +1098,18 @@ def beacon_network_stats() -> dict:
 # multi-node health aggregation, and e-waste preservation fleet
 # ═══════════════════════════════════════════════════════════════
 
-# All four RustChain attestation nodes
+# The live RustChain attestation nodes. There are two. Earlier releases
+# listed four; the volunteer nodes (a Tailscale-only Proxmox VM and a Hong
+# Kong host that now serves an unrelated web app) are gone, and the HK host
+# answering 200 on every path made a status-code-only check report it
+# healthy indefinitely. Health is therefore judged on the JSON body below.
+#
+# Node 1 is reached through rustchain.org, which carries a valid certificate.
+# Node 2 has no hostname and presents a self-signed certificate, so it is
+# probed without certificate verification (flagged per-node in the result).
 RUSTCHAIN_NODES = [
-    {"name": "Node 1 (Primary)", "url": "https://50.28.86.131"},
-    {"name": "Node 2 (Ergo Anchor)", "url": "https://50.28.86.153"},
-    {"name": "Node 3 (Ryan/Proxmox)", "url": "http://100.88.109.32:8099"},
-    {"name": "Node 4 (HK/CognetCloud)", "url": "http://38.76.217.189:8099"},
+    {"name": "Node 1 (Primary, settlement)", "url": "https://rustchain.org", "tls_verify": True},
+    {"name": "Node 2 (Ergo anchor)", "url": "https://50.28.86.153", "tls_verify": False},
 ]
 
 BOUNTIES_REPO = "Scottcjn/Rustchain"
@@ -1189,7 +1199,9 @@ def bounty_search(
     """Search open RustChain and BoTTube bounties by keyword, amount, or difficulty.
 
     Queries GitHub Issues labeled 'bounty' on the specified repository.
-    Bounties are paid in RTC tokens (1 RTC = $0.10 USD).
+    Bounties are paid in RTC. Reward sizes are set against the project's
+    internal reference rate; that rate is not a market price and RTC is
+    not offered for sale.
 
     Args:
         keyword: Search term to match in bounty title/body (empty = all)
@@ -1347,46 +1359,60 @@ def contributor_lookup(username: str) -> dict:
 
 @mcp.tool()
 def network_health() -> dict:
-    """Get aggregate health status of all 4 RustChain attestation nodes.
+    """Get aggregate health of the live RustChain attestation nodes.
 
-    Queries each of the 4 geographically distributed RustChain nodes
-    and returns their health, version, uptime, and reachability.
+    There are currently two attestation nodes:
+    - Node 1 — primary; runs epoch settlement. Reached via https://rustchain.org
+    - Node 2 (50.28.86.153) — secondary; Ergo anchor
 
-    Nodes:
-    - Node 1 (50.28.86.131) — Primary, LiquidWeb VPS
-    - Node 2 (50.28.86.153) — Ergo Anchor, LiquidWeb VPS
-    - Node 3 (100.88.109.32) — Ryan's Proxmox, first external node
-    - Node 4 (38.76.217.189) — CognetCloud Hong Kong, first Asian node
+    A node counts as healthy only when /health returns a JSON body with
+    ok=true; an HTTP 200 alone is not enough (a decommissioned host that
+    serves a web app answers 200 on every path). Node 2 presents a
+    self-signed certificate, so its probe skips certificate verification
+    and the result says so (tls_verified=false).
 
-    Returns per-node health and an aggregate summary.
+    Returns per-node health plus a summary. network_ok means the primary
+    node is healthy; all_nodes_ok means every listed node is.
     """
-    client = get_client()
     nodes_status = []
     healthy_count = 0
+    primary_ok = False
 
-    for node in RUSTCHAIN_NODES:
+    for index, node in enumerate(RUSTCHAIN_NODES):
+        verify = node.get("tls_verify", True)
         status = {
             "name": node["name"],
             "url": node["url"],
+            "tls_verified": bool(verify),
         }
         try:
+            client = get_client() if verify else _health_probe_client()
             r = client.get(f"{node['url']}/health", timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                status["healthy"] = data.get("ok", False)
-                status["version"] = data.get("version", "unknown")
-                status["uptime_s"] = data.get("uptime_s", 0)
-                status["db_rw"] = data.get("db_rw", False)
-                status["tip_age_slots"] = data.get("tip_age_slots", 0)
-                if data.get("ok"):
-                    healthy_count += 1
-            else:
+            if r.status_code != 200:
                 status["healthy"] = False
                 status["error"] = f"HTTP {r.status_code}"
+            else:
+                try:
+                    data = r.json()
+                except Exception:
+                    data = None
+                if not isinstance(data, dict):
+                    status["healthy"] = False
+                    status["error"] = "non-JSON /health body (host may no longer run a node)"
+                else:
+                    status["healthy"] = data.get("ok") is True
+                    status["version"] = data.get("version", "unknown")
+                    status["uptime_s"] = data.get("uptime_s", 0)
+                    status["db_rw"] = data.get("db_rw", False)
+                    status["tip_age_slots"] = data.get("tip_age_slots", 0)
         except Exception as e:
             status["healthy"] = False
             status["error"] = str(e)[:120]
 
+        if status["healthy"]:
+            healthy_count += 1
+            if index == 0:
+                primary_ok = True
         nodes_status.append(status)
 
     total = len(RUSTCHAIN_NODES)
@@ -1395,10 +1421,27 @@ def network_health() -> dict:
             "total_nodes": total,
             "healthy": healthy_count,
             "degraded": total - healthy_count,
-            "network_ok": healthy_count >= 2,  # Majority quorum
+            "primary_ok": primary_ok,
+            "network_ok": primary_ok,
+            "all_nodes_ok": healthy_count == total,
         },
         "nodes": nodes_status,
     }
+
+
+_probe_client = None
+
+
+def _health_probe_client() -> httpx.Client:
+    """Client for read-only /health probes of nodes with self-signed certs.
+
+    Used only by network_health for GET /health; nothing sensitive is sent.
+    Results obtained through it are flagged tls_verified=false.
+    """
+    global _probe_client
+    if _probe_client is None:
+        _probe_client = httpx.Client(timeout=RUSTCHAIN_TIMEOUT, verify=False)
+    return _probe_client
 
 
 @mcp.tool()
@@ -1508,12 +1551,17 @@ Miners earn more for running older, rarer hardware:
 | PowerPC G5 | 2.0x |
 | PowerPC G3 | 1.8x |
 | Pentium 4 | 1.5x |
-| IBM POWER8 | 1.3x |
+| IBM POWER8 | 1.5x |
 | Apple Silicon | 1.2x |
 | Modern x86_64 | 1.0x |
 
-- Token: RTC (1 RTC = $0.10 USD reference)
-- Total supply: 8,388,608 RTC (2^23)
+- Token: RTC, the chain's own reward and fee unit. It is earned by
+  attesting hardware and by completing bounties; it is not sold, not
+  listed on any exchange, and there is no bridge or wrapped form.
+  The project's "reference rate" is an internal number used to size
+  bounties, not a price or an investment claim.
+- Total supply: 8,388,608 RTC (2^23), fixed
+- Attestation nodes: 2 live (primary + Ergo anchor)
 - Consensus: RIP-200 (1 CPU = 1 Vote, round-robin)
 - Security: 7 hardware fingerprint checks (RIP-PoA)
 - Agent Economy: RIP-302 (bounties, jobs, gas fees)
@@ -1636,7 +1684,9 @@ Active bounties at https://github.com/Scottcjn/rustchain-bounties
 - 218 recipients
 - 716 transactions
 
-RTC reference rate: $0.10 USD
+RTC is earned, not bought: it is not for sale and has no market price.
+Bounty sizes are set against an internal reference rate maintained by
+the project; treat that rate as a sizing convention, not a valuation.
 """
 
 
