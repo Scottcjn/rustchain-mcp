@@ -38,6 +38,14 @@ RustChain supplies the RTC blockchain and Proof-of-Antiquity value rail, BoTTube
 
 Wallet seed phrases are encrypted locally and not returned in tool responses; failed upstream lookups should return structured errors instead of fake zero balances.
 
+### Is RTC something I can buy, trade, or invest in?
+
+No. RTC is the RustChain network's own reward and fee unit. It is earned by attesting real hardware and by completing bounties. It is not offered for sale, is not listed on any exchange, and there is no bridge, wrapped token, or on-ramp. The project maintains an **internal reference rate** used only to size bounty rewards; it is not a price, a valuation, or an investment claim, and nothing in this package should be read as one.
+
+### How many RustChain nodes are there?
+
+Two live attestation nodes: a primary (which runs epoch settlement, reached via `https://rustchain.org`) and a secondary Ergo-anchor node. `network_health` reports on both. Total RTC supply is fixed at 8,388,608 (2^23).
+
 ### Does rustchain-mcp stream partial miner results? (#231)
 
 No. `rustchain_events` is a standard MCP tool that returns a bounded JSON batch,
@@ -132,8 +140,8 @@ cursor semantics, and security notes are in
 ## Prerequisites
 
 - Python 3.10+
-- Valid RustChain API key (get one at [rustchain.org](https://rustchain.org))
 - MCP-compatible client (Claude, Continue, etc.)
+- No API key is needed for the RustChain or Beacon read tools. BoTTube write tools (`bottube_upload`, `bottube_comment`, `bottube_vote`) take an optional BoTTube API key argument.
 
 ## Available Tools
 
@@ -169,7 +177,7 @@ after a relay restart or legacy numeric cursor.
 - `legend_of_elya_info` — Info about the N64-style LLM adventure game (stars, architecture, bounties)
 - `bounty_search` — Search open bounties by keyword, RTC amount, or difficulty
 - `contributor_lookup` — Look up a contributor's RTC balance and merged PR history
-- `network_health` — Aggregate health of all 4 RustChain attestation nodes
+- `network_health` — Aggregate health of the live RustChain attestation nodes (currently 2; healthy means a JSON `ok: true` body, not just HTTP 200)
 - `green_tracker` — Fleet of preserved vintage machines (e-waste prevention tracker)
 
 ### BCOS (2 tools)
@@ -354,7 +362,7 @@ export RUSTCHAIN_EVENT_MINERS_LIMIT=100
 **Connection Error:**
 ```
 Error: Failed to connect to RustChain network
-Solution: Check your API key and network status
+Solution: Check RUSTCHAIN_NODE (default https://rustchain.org), TLS settings, and network status
 ```
 
 **Insufficient Balance:**
@@ -426,11 +434,17 @@ Client guidance:
 
 ### Debug Mode
 
-Enable verbose logging:
+The `rustchain-mcp` console script takes no command-line flags; it is
+configured entirely through the environment variables above. The server logs
+through the standard `logging` module under the `rustchain_mcp` logger, and
+FastMCP honours `FASTMCP_LOG_LEVEL`:
 
 ```bash
-rustchain-mcp --debug --log-file rustchain.log
+FASTMCP_LOG_LEVEL=DEBUG rustchain-mcp
 ```
+
+Your MCP client (Claude Desktop, Claude Code, etc.) captures the server's
+stderr in its own log location.
 
 ### Getting Help
 
@@ -462,7 +476,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Start earning RTC today!** Create your first agent wallet and begin exploring the decentralized AI economy.
+Create an agent wallet, attest some hardware or pick up a bounty, and the
+tools above let your agent see the result on-chain. RTC is earned, not
+bought; see the FAQ at the top of this file.
 
 
 ## Streaming and long-running tool behavior
@@ -471,7 +487,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### What that means in practice
 
-- A call to a slow tool (e.g. `rustchain_miners` when many miners are enrolled, or `network_health` which fans out to 4 nodes) **blocks until the full response is ready**, bounded by `RUSTCHAIN_TIMEOUT` (default **30 s**, configurable via the `RUSTCHAIN_TIMEOUT` environment variable).
+- A call to a slow tool (e.g. `rustchain_miners` when many miners are enrolled, or `network_health` which fans out to both attestation nodes) **blocks until the full response is ready**, bounded by `RUSTCHAIN_TIMEOUT` (default **30 s**, configurable via the `RUSTCHAIN_TIMEOUT` environment variable).
 - If the node returns an HTTP error, the tool returns a **structured error dict** instead of data — e.g. `{"status": "error", "error": "<server diagnostic>"}`. The server never fabricates an empty "success" result.
 - If the node is unreachable (connection refused, DNS failure, read timeout), the underlying network exception propagates to the client. Wrap calls in a try/except in your integration and surface `str(exc)` to the user.
 - Results are **bounded** for large payloads (e.g. `rustchain_miners` caps the list at 20 entries) to avoid token overflow in LLM contexts.

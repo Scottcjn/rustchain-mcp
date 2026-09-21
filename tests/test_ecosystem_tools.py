@@ -11,7 +11,7 @@ Tests for:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 import pytest
@@ -295,48 +295,95 @@ class TestContributorLookup:
 class TestNetworkHealth:
     """Tests for network_health tool."""
 
-    def test_all_nodes_healthy(self):
-        healthy = FakeResponse(200, {
-            "ok": True, "version": "2.2.1-rip200",
-            "uptime_s": 3600, "db_rw": True, "tip_age_slots": 0,
-        })
-        with _patch_client({"/health": healthy}):
-            result = server.network_health()
+    HEALTHY: ClassVar[dict[str, Any]] = {
+        "ok": True, "version": "2.2.1-rip200",
+        "uptime_s": 3600, "db_rw": True, "tip_age_slots": 0,
+    }
 
-        assert result["summary"]["total_nodes"] == 4
-        assert result["summary"]["healthy"] == 4
+    @staticmethod
+    def _patch_both_clients(client):
+        """network_health uses get_client() for verified nodes and the
+        no-verify probe client for self-signed ones; patch both."""
+        return (
+            mock.patch.object(server, "get_client", return_value=client),
+            mock.patch.object(server, "_health_probe_client", return_value=client),
+        )
+
+    def _run(self, client):
+        verified, probe = self._patch_both_clients(client)
+        with verified, probe:
+            return server.network_health()
+
+    def test_exactly_two_live_nodes_are_listed(self):
+        """Two attestation nodes are live. Dead volunteer nodes must not be
+        listed, and no Tailscale-only or decommissioned address may appear."""
+        assert len(server.RUSTCHAIN_NODES) == 2
+        urls = [n["url"] for n in server.RUSTCHAIN_NODES]
+        assert urls[0] == "https://rustchain.org"  # primary, valid certificate
+        assert any("50.28.86.153" in u for u in urls)
+        for dead in ("38.76.217.189", "100.88.109.32", "50.28.86.131"):
+            assert not any(dead in u for u in urls), dead
+
+    def test_all_nodes_healthy(self):
+        result = self._run(FakeClient({"/health": FakeResponse(200, self.HEALTHY)}))
+
+        assert result["summary"]["total_nodes"] == 2
+        assert result["summary"]["healthy"] == 2
+        assert result["summary"]["degraded"] == 0
+        assert result["summary"]["primary_ok"] is True
         assert result["summary"]["network_ok"] is True
-        assert len(result["nodes"]) == 4
+        assert result["summary"]["all_nodes_ok"] is True
+        assert len(result["nodes"]) == 2
         for node in result["nodes"]:
             assert node["healthy"] is True
+            assert node["version"] == "2.2.1-rip200"
 
-    def test_partial_failure(self):
-        """Network is still OK with 2+ nodes healthy (majority quorum)."""
-        call_count = {"n": 0}
-        healthy = FakeResponse(200, {"ok": True, "version": "2.2.1-rip200", "uptime_s": 100, "db_rw": True, "tip_age_slots": 0})
+    def test_tls_verification_flag_is_reported_per_node(self):
+        result = self._run(FakeClient({"/health": FakeResponse(200, self.HEALTHY)}))
+
+        by_url = {n["url"]: n for n in result["nodes"]}
+        assert by_url["https://rustchain.org"]["tls_verified"] is True
+        assert by_url["https://50.28.86.153"]["tls_verified"] is False
+
+    def test_secondary_down_primary_up(self):
+        """network_ok tracks the settlement node; all_nodes_ok does not."""
+        healthy = FakeResponse(200, self.HEALTHY)
 
         class PartialClient:
             def get(self, url, **kw):
-                call_count["n"] += 1
-                # First 2 succeed, last 2 fail
-                if call_count["n"] <= 2:
+                if "rustchain.org" in url:
                     return healthy
                 raise ConnectionError("unreachable")
 
-        with mock.patch.object(server, "get_client", return_value=PartialClient()):
-            result = server.network_health()
+        result = self._run(PartialClient())
 
-        assert result["summary"]["healthy"] == 2
-        assert result["summary"]["degraded"] == 2
+        assert result["summary"]["healthy"] == 1
+        assert result["summary"]["degraded"] == 1
+        assert result["summary"]["primary_ok"] is True
         assert result["summary"]["network_ok"] is True
+        assert result["summary"]["all_nodes_ok"] is False
+
+    def test_primary_down_secondary_up(self):
+        healthy = FakeResponse(200, self.HEALTHY)
+
+        class PartialClient:
+            def get(self, url, **kw):
+                if "50.28.86.153" in url:
+                    return healthy
+                raise ConnectionError("unreachable")
+
+        result = self._run(PartialClient())
+
+        assert result["summary"]["healthy"] == 1
+        assert result["summary"]["primary_ok"] is False
+        assert result["summary"]["network_ok"] is False
 
     def test_all_nodes_down(self):
         class DeadClient:
             def get(self, url, **kw):
                 raise ConnectionError("network down")
 
-        with mock.patch.object(server, "get_client", return_value=DeadClient()):
-            result = server.network_health()
+        result = self._run(DeadClient())
 
         assert result["summary"]["healthy"] == 0
         assert result["summary"]["network_ok"] is False
@@ -345,21 +392,32 @@ class TestNetworkHealth:
             assert "error" in node
 
     def test_node_returns_non_200(self):
-        with _patch_client({"/health": FakeResponse(503, {})}):
-            result = server.network_health()
+        result = self._run(FakeClient({"/health": FakeResponse(503, {})}))
 
         for node in result["nodes"]:
             assert node["healthy"] is False
+            assert node["error"] == "HTTP 503"
 
-    def test_node_urls_present(self):
-        with _patch_client({"/health": FakeResponse(200, {"ok": True, "version": "2.2.1", "uptime_s": 0, "db_rw": True, "tip_age_slots": 0})}):
-            result = server.network_health()
+    def test_http_200_with_html_body_is_not_healthy(self):
+        """A decommissioned host serving a web app answers 200 on every path.
+        That must not count as a healthy node."""
 
-        urls = [n["url"] for n in result["nodes"]]
-        assert any("50.28.86.131" in u for u in urls)
-        assert any("50.28.86.153" in u for u in urls)
-        assert any("100.88.109.32" in u for u in urls)
-        assert any("38.76.217.189" in u for u in urls)
+        class HtmlResponse(FakeResponse):
+            def json(self):
+                raise ValueError("not JSON")
+
+        result = self._run(FakeClient({"/health": HtmlResponse(200, "<title>New API</title>")}))
+
+        assert result["summary"]["healthy"] == 0
+        for node in result["nodes"]:
+            assert node["healthy"] is False
+            assert "non-JSON" in node["error"]
+
+    def test_http_200_with_ok_false_is_not_healthy(self):
+        result = self._run(FakeClient({"/health": FakeResponse(200, {"ok": False, "version": "x"})}))
+
+        assert result["summary"]["healthy"] == 0
+        assert result["summary"]["network_ok"] is False
 
 
 # ═══════════════════════════════════════════════════════════════
