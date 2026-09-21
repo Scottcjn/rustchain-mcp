@@ -70,8 +70,12 @@ def test_long_running_tool_is_request_response_full_result():
     fake = FakeClient([FakeResponse(200, payload)])
     with _install_client(fake):
         result = server.rustchain_miners()
-    assert result["total_miners"] == 25
+    # Bare-list payload carries no pagination metadata, so the tool must not
+    # invent a total (see rustchain_miners docstring): total_known is False.
+    assert result["total_known"] is False
+    assert "total_miners" not in result
     assert "miners" in result and len(result["miners"]) == 20  # bounded output
+    assert result["page_count"] == 20
     assert fake.calls[0].endswith("/api/miners")
 
 
