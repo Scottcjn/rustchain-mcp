@@ -302,7 +302,7 @@ parse `--api-key` or `--network` command-line arguments.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RUSTCHAIN_NODE` | `https://50.28.86.131` | RustChain node base URL |
+| `RUSTCHAIN_NODE` | `https://rustchain.org` | RustChain node base URL. Pointing this at a bare node IP requires `RUSTCHAIN_TLS_VERIFY=false` or a CA bundle, because the node certificate is issued for a hostname |
 | `RUSTCHAIN_TIMEOUT` | `30` | Timeout for regular MCP HTTP tools |
 | `RUSTCHAIN_TLS_VERIFY` | `true` | Set false only for a trusted self-signed test node |
 | `RUSTCHAIN_CA_BUNDLE` | unset | CA bundle path; takes precedence over TLS verify |

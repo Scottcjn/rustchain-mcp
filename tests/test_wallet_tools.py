@@ -654,8 +654,10 @@ class TestMCPServerWalletTools:
         assert result.get("balance") == 42.0
         assert result.get("balance_rtc") == 42.0
         assert result.get("wallet_id") == "balance-agent"
+        from rustchain_mcp import server as server_module
+
         mock_client.get.assert_called_once_with(
-            "https://50.28.86.131/wallet/balance",
+            f"{server_module.RUSTCHAIN_NODE}/wallet/balance",
             params={"miner_id": created["address"]},
         )
 
@@ -682,8 +684,10 @@ class TestMCPServerWalletTools:
         assert result.get("balance") == 12.5
         assert result.get("balance_rtc") == 12.5
         assert result.get("wallet_id") == "RTCdirect123"
+        from rustchain_mcp import server as server_module
+
         mock_client.get.assert_called_once_with(
-            "https://50.28.86.131/wallet/balance",
+            f"{server_module.RUSTCHAIN_NODE}/wallet/balance",
             params={"miner_id": "RTCdirect123"},
         )
 
