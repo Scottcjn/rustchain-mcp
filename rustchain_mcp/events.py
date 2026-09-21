@@ -86,7 +86,7 @@ def _validate_node_url(value: str) -> str:
 class EventRelayConfig:
     """Validated polling and retention limits for an event relay."""
 
-    node_url: str = "https://50.28.86.131"
+    node_url: str = "https://rustchain.org"
     poll_interval: float = 5.0
     request_timeout: float = 5.0
     backoff_initial: float = 1.0

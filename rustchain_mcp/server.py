@@ -39,7 +39,11 @@ from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_to
 LOGGER = logging.getLogger("rustchain_mcp.server")
 
 # ── Configuration ──────────────────────────────────────────────
-RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
+# Default to the public hostname, not the bare node IP: the node's TLS
+# certificate is issued for a hostname, so https://<ip> fails certificate
+# verification out of the box and every RustChain tool would error for a
+# first-time user. rustchain.org fronts the primary node with a valid cert.
+RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://rustchain.org")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 RUSTCHAIN_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT", "30"))
@@ -586,10 +590,40 @@ def rustchain_stats() -> dict:
 
     Returns system-wide stats including total miners, epoch info,
     reward distribution, and network health metrics.
+
+    The public https://rustchain.org front end does not proxy /api/stats
+    (only the raw node exposes it). When the node answers 404, the tool
+    composes an equivalent summary from /epoch and /health and marks it
+    with source="composed" so callers can tell the two apart.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/api/stats")
-    r.raise_for_status()
-    return r.json()
+    client = get_client()
+    r = client.get(f"{RUSTCHAIN_NODE}/api/stats")
+    if r.status_code != 404:
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            data.setdefault("source", "/api/stats")
+        return data
+
+    epoch = client.get(f"{RUSTCHAIN_NODE}/epoch")
+    epoch.raise_for_status()
+    epoch_data = epoch.json()
+    health = client.get(f"{RUSTCHAIN_NODE}/health")
+    health.raise_for_status()
+    health_data = health.json()
+    return {
+        "source": "composed",
+        "note": "/api/stats is not exposed by this endpoint; composed from /epoch and /health",
+        "epoch": epoch_data.get("epoch"),
+        "slot": epoch_data.get("slot"),
+        "enrolled_miners": epoch_data.get("enrolled_miners"),
+        "epoch_pot": epoch_data.get("epoch_pot"),
+        "blocks_per_epoch": epoch_data.get("blocks_per_epoch"),
+        "total_supply_rtc": epoch_data.get("total_supply_rtc"),
+        "node_ok": health_data.get("ok"),
+        "node_version": health_data.get("version"),
+        "tip_age_slots": health_data.get("tip_age_slots"),
+    }
 
 
 @mcp.tool()
