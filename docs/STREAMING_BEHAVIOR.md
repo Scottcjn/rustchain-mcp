@@ -19,7 +19,7 @@ All HTTP requests use `httpx` with a configurable timeout:
 | Variable | Default | Description |
 |---|---|---|
 | `RUSTCHAIN_TIMEOUT` | 30s | HTTP request timeout for all RPC calls |
-| `RUSTCHAIN_NODE` | https://50.28.86.131 | RustChain node URL |
+| `RUSTCHAIN_NODE` | https://rustchain.org | RustChain node URL (bare node IPs need `RUSTCHAIN_TLS_VERIFY=false` or a CA bundle) |
 | `RUSTCHAIN_CA_BUNDLE` | true | TLS verification (true/false/path) |
 
 To increase the timeout for slow nodes or large responses:
