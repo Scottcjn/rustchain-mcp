@@ -55,7 +55,7 @@ For verification purposes, this example was created using the wallet: `yoshi-bou
 
 ### What that means in practice
 
-- A call to a slow tool (e.g. `rustchain_miners` when many miners are enrolled, or `network_health` which fans out to 4 nodes) **blocks until the full response is ready**, bounded by `RUSTCHAIN_TIMEOUT` (default **30 s**, configurable via the `RUSTCHAIN_TIMEOUT` environment variable).
+- A call to a slow tool (e.g. `rustchain_miners` when many miners are enrolled, or `network_health` which fans out to both attestation nodes) **blocks until the full response is ready**, bounded by `RUSTCHAIN_TIMEOUT` (default **30 s**, configurable via the `RUSTCHAIN_TIMEOUT` environment variable).
 - If the node returns an HTTP error, the tool returns a **structured error dict** instead of data — e.g. `{"status": "error", "error": "<server diagnostic>"}`. The server never fabricates an empty "success" result.
 - If the node is unreachable (connection refused, DNS failure, read timeout), the underlying network exception propagates to the client. Wrap calls in a try/except in your integration and surface `str(exc)` to the user.
 - Results are **bounded** for large payloads (e.g. `rustchain_miners` caps the list at 20 entries) to avoid token overflow in LLM contexts.
