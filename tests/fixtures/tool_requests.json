@@ -1,0 +1,951 @@
+{
+  "bcos_directory": {
+    "args": {
+      "tier": "gold",
+      "limit": 5
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/bcos/directory",
+        "params": {
+          "limit": 5,
+          "tier": "gold"
+        }
+      }
+    ]
+  },
+  "bcos_verify": {
+    "args": {
+      "cert_id": "BCOS-9fef0ce3"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/bcos/verify/BCOS-9fef0ce3"
+      }
+    ]
+  },
+  "beacon_agent_status": {
+    "args": {
+      "agent_id": "bcn_x"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://beacon.test/beacon/relay/status/bcn_x"
+      }
+    ]
+  },
+  "beacon_chat": {
+    "args": {
+      "agent_id": "bcn_sophia_elya",
+      "message": "hi"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://beacon.test/beacon/api/chat",
+        "json": {
+          "agent_id": "bcn_sophia_elya",
+          "message": "hi"
+        }
+      }
+    ]
+  },
+  "beacon_contracts": {
+    "args": {
+      "agent_id": "bcn_a"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "agent_id": "bcn_a",
+            "provider": "anthropic",
+            "capabilities": [
+              "coding"
+            ],
+            "from": "bcn_a",
+            "to": "bcn_b"
+          }
+        ]
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://beacon.test/beacon/api/contracts"
+      }
+    ]
+  },
+  "beacon_discover": {
+    "args": {
+      "provider": "anthropic",
+      "capability": "coding"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "agent_id": "bcn_a",
+            "provider": "anthropic",
+            "capabilities": [
+              "coding"
+            ],
+            "from": "bcn_a",
+            "to": "bcn_b"
+          }
+        ]
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://beacon.test/beacon/api/agents"
+      }
+    ]
+  },
+  "beacon_heartbeat": {
+    "args": {
+      "agent_id": "bcn_x",
+      "relay_token": "tok",
+      "status": "degraded"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://beacon.test/beacon/relay/heartbeat",
+        "json": {
+          "agent_id": "bcn_x",
+          "status": "degraded"
+        },
+        "headers": {
+          "Authorization": "Bearer tok"
+        }
+      }
+    ]
+  },
+  "beacon_network_stats": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://beacon.test/beacon/relay/stats"
+      },
+      {
+        "method": "GET",
+        "url": "https://beacon.test/beacon/api/health"
+      }
+    ]
+  },
+  "beacon_register": {
+    "args": {
+      "name": "fixture-bot",
+      "pubkey_hex": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "model_id": "m",
+      "provider": "other",
+      "capabilities": "coding, research",
+      "webhook_url": "https://hook.test/in"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://beacon.test/beacon/relay/register",
+        "json": {
+          "pubkey_hex": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "model_id": "m",
+          "provider": "other",
+          "capabilities": [
+            "coding",
+            "research"
+          ],
+          "name": "fixture-bot",
+          "webhook_url": "https://hook.test/in"
+        }
+      }
+    ]
+  },
+  "beacon_send_message": {
+    "args": {
+      "relay_token": "tok",
+      "from_agent": "bcn_a",
+      "to_agent": "bcn_b",
+      "content": "hi",
+      "kind": "hello"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://beacon.test/beacon/relay/message",
+        "json": {
+          "kind": "hello",
+          "agent_id": "bcn_a",
+          "to": "bcn_b",
+          "content": "hi",
+          "nonce": "<any>",
+          "ts": "<any>"
+        },
+        "headers": {
+          "Authorization": "Bearer tok"
+        }
+      }
+    ]
+  },
+  "bottube_agent_profile": {
+    "args": {
+      "agent_name": "sophia-elya"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://bottube.test/api/agents/sophia-elya"
+      }
+    ]
+  },
+  "bottube_comment": {
+    "args": {
+      "video_id": "vid1",
+      "content": "hello",
+      "api_key": "k"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://bottube.test/api/videos/vid1/comment",
+        "json": {
+          "content": "hello"
+        },
+        "headers": {
+          "X-API-Key": "k"
+        }
+      }
+    ]
+  },
+  "bottube_search": {
+    "args": {
+      "query": "vintage",
+      "page": 2
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://bottube.test/api/search",
+        "params": {
+          "q": "vintage",
+          "page": 2
+        }
+      }
+    ]
+  },
+  "bottube_stats": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://bottube.test/api/stats"
+      }
+    ]
+  },
+  "bottube_trending": {
+    "args": {
+      "limit": 500
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://bottube.test/api/trending",
+        "params": {
+          "limit": 50
+        }
+      }
+    ]
+  },
+  "bottube_upload": {
+    "args": {
+      "title": "t",
+      "video_url": "https://cdn.test/v.mp4",
+      "description": "d",
+      "tags": "a,b",
+      "api_key": "k"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://bottube.test/api/upload",
+        "json": {
+          "title": "t",
+          "video_url": "https://cdn.test/v.mp4",
+          "description": "d",
+          "tags": "a,b"
+        },
+        "headers": {
+          "X-API-Key": "k"
+        }
+      }
+    ]
+  },
+  "bottube_vote": {
+    "args": {
+      "video_id": "vid1",
+      "direction": "down",
+      "api_key": "k"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://bottube.test/api/videos/vid1/vote",
+        "json": {
+          "direction": "down"
+        },
+        "headers": {
+          "X-API-Key": "k"
+        }
+      }
+    ]
+  },
+  "bounty_search": {
+    "args": {
+      "keyword": "docs",
+      "difficulty": "easy",
+      "repo": "all"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://api.github.com/search/issues",
+        "params": {
+          "q": "repo:Scottcjn/Rustchain is:issue is:open label:bounty docs label:easy",
+          "per_page": 30,
+          "sort": "created",
+          "order": "desc"
+        },
+        "headers": {
+          "Accept": "application/vnd.github.v3+json"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "https://api.github.com/search/issues",
+        "params": {
+          "q": "repo:Scottcjn/BoTTube is:issue is:open label:bounty docs label:easy",
+          "per_page": 30,
+          "sort": "created",
+          "order": "desc"
+        },
+        "headers": {
+          "Accept": "application/vnd.github.v3+json"
+        }
+      }
+    ]
+  },
+  "contributor_lookup": {
+    "args": {
+      "username": "createkr"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://api.github.com/search/issues",
+        "params": {
+          "q": "repo:Scottcjn/Rustchain is:pr is:merged author:createkr",
+          "per_page": 20,
+          "sort": "updated",
+          "order": "desc"
+        },
+        "headers": {
+          "Accept": "application/vnd.github.v3+json"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "https://api.github.com/search/issues",
+        "params": {
+          "q": "repo:Scottcjn/BoTTube is:pr is:merged author:createkr",
+          "per_page": 20,
+          "sort": "updated",
+          "order": "desc"
+        },
+        "headers": {
+          "Accept": "application/vnd.github.v3+json"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/wallet/balance",
+        "params": {
+          "miner_id": "createkr"
+        }
+      }
+    ]
+  },
+  "green_tracker": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.org/preserved.html"
+      }
+    ]
+  },
+  "rustchain_balance": {
+    "args": {
+      "wallet_id": "dual-g4-125"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/wallet/balance",
+        "params": {
+          "miner_id": "dual-g4-125"
+        }
+      }
+    ]
+  },
+  "rustchain_create_wallet": {
+    "args": {
+      "agent_name": "fixture-agent"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://rustchain.test/wallet/create",
+        "json": {
+          "agent_name": "fixture-agent"
+        }
+      }
+    ]
+  },
+  "rustchain_epoch": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/epoch"
+      }
+    ]
+  },
+  "rustchain_health": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/health"
+      }
+    ]
+  },
+  "rustchain_lottery_eligibility": {
+    "args": {
+      "miner_id": "dual-g4-125"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/lottery/eligibility",
+        "params": {
+          "miner_id": "dual-g4-125"
+        }
+      }
+    ]
+  },
+  "rustchain_miners": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/api/miners",
+        "params": {
+          "limit": 20,
+          "offset": 0
+        }
+      }
+    ]
+  },
+  "rustchain_stats": {
+    "args": {},
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/api/stats"
+      }
+    ]
+  },
+  "rustchain_transfer_signed": {
+    "args": {
+      "from_address": "RTCfrom",
+      "to_address": "RTCto",
+      "amount_rtc": 1.25,
+      "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "public_key": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "memo": "fixture",
+      "nonce": 1700000000000
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "https://rustchain.test/wallet/transfer/signed",
+        "json": {
+          "from_address": "RTCfrom",
+          "to_address": "RTCto",
+          "amount_rtc": 1.25,
+          "memo": "fixture",
+          "nonce": "<any>",
+          "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+          "public_key": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        }
+      }
+    ]
+  },
+  "wallet_balance": {
+    "args": {
+      "wallet_id": "RTCfixture0000000000000000000000000000000000"
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/wallet/balance",
+        "params": {
+          "miner_id": "RTCfixture0000000000000000000000000000000000"
+        }
+      }
+    ]
+  },
+  "wallet_history": {
+    "args": {
+      "wallet_id": "RTCfixture0000000000000000000000000000000000",
+      "limit": 500
+    },
+    "responses": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "amount_rtc": 5.0,
+          "miner_id": "x",
+          "miners": [],
+          "items": [],
+          "agents": [],
+          "relay": true,
+          "version": "fixture"
+        }
+      }
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "https://rustchain.test/wallet/history",
+        "params": {
+          "address": "RTCfixture0000000000000000000000000000000000",
+          "limit": 100
+        }
+      }
+    ]
+  }
+}
