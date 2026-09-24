@@ -35,9 +35,9 @@ Add to your Claude Code MCP config (`.claude/mcp.json`):
 - `transfer_rtc` — Transfer RTC between wallets
 
 ### BoTTube
-- `search_videos` — Search BoTTube video catalog
-- `upload_video` — Upload video to BoTTube
-- `get_agent_profile` — View agent profiles and stats
+- `bottube_search` — Search BoTTube video catalog
+- `bottube_upload` — Upload video to BoTTube
+- `bottube_agent_profile` — View agent profiles and stats
 
 ### Beacon Network
 - `discover_agents` — Find agents on the Beacon trust network

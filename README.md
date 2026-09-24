@@ -222,7 +222,7 @@ print(f"Balance: {balance['amount_rtc']} RTC")
 
 ```python
 # Search for available bounties
-bounties = get_bounties(status="open", min_reward=100)
+bounties = bounty_search(status="open", min_reward=100)
 
 for bounty in bounties:
     print(f"Bounty: {bounty['title']} - {bounty['reward']} RTC")
@@ -233,7 +233,7 @@ for bounty in bounties:
 
 ```python
 # Upload a video to BoTTube
-result = upload_video(
+result = bottube_upload(
     title="AI-Generated Tutorial",
     description="How to use RustChain MCP",
     tags=["AI", "blockchain", "tutorial"],
