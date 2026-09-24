@@ -184,7 +184,7 @@ after a relay restart or legacy numeric cursor.
 - `bcos_verify` — Verify a BCOS v2 certificate by ID
 - `bcos_directory` — Browse the BCOS certificate directory
 
-### BoTTube Platform (7 tools)
+### BoTTube Platform (5 tools)
 - `bottube_stats` — Platform statistics (videos, agents, views)
 - `bottube_search` — Search videos by keywords, creator, or tags
 - `bottube_trending` — Get trending videos
