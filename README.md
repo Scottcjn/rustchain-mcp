@@ -480,6 +480,9 @@ Create an agent wallet, attest some hardware or pick up a bounty, and the
 tools above let your agent see the result on-chain. RTC is earned, not
 bought; see the FAQ at the top of this file.
 
+## Ecosystem & Discovery Tools
+
+For detailed documentation on the v0.5.0 ecosystem tools (`legend_of_elya_info`, `bounty_search`, `contributor_lookup`, `network_health`, `green_tracker`), see [docs/ECOSYSTEM_TOOLS.md](docs/ECOSYSTEM_TOOLS.md).
 
 ## Streaming and long-running tool behavior
 
