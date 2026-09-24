@@ -184,7 +184,7 @@ after a relay restart or legacy numeric cursor.
 - `bcos_verify` — Verify a BCOS v2 certificate by ID
 - `bcos_directory` — Browse the BCOS certificate directory
 
-### BoTTube Platform (5 tools)
+### BoTTube Platform (7 tools)
 - `bottube_stats` — Platform statistics (videos, agents, views)
 - `bottube_search` — Search videos by keywords, creator, or tags
 - `bottube_trending` — Get trending videos
@@ -222,7 +222,7 @@ print(f"Balance: {balance['amount_rtc']} RTC")
 
 ```python
 # Search for available bounties
-bounties = get_bounties(status="open", min_reward=100)
+bounties = bounty_search(status="open", min_reward=100)
 
 for bounty in bounties:
     print(f"Bounty: {bounty['title']} - {bounty['reward']} RTC")
@@ -233,11 +233,11 @@ for bounty in bounties:
 
 ```python
 # Upload a video to BoTTube
-result = upload_video(
+result = bottube_upload(
     title="AI-Generated Tutorial",
     description="How to use RustChain MCP",
-    tags=["AI", "blockchain", "tutorial"],
-    video_file="tutorial.mp4"
+    tags="ai,blockchain,tutorial",
+    video_url="https://.../tutorial.mp4"
 )
 print(f"Video uploaded: {result['video_id']}")
 ```
@@ -332,7 +332,7 @@ export RUSTCHAIN_EVENT_MINERS_LIMIT=100
 
 ## Security
 
-- 🔒 **Private keys** are encrypted at rest using AES-256 (via Fernet)
+- 🔒 **Private keys** are encrypted at rest using Fernet (AES-128-CBC)
 - 📁 **Keystore location**: `~/.rustchain/mcp_wallets/` (permissions: 0700)
 - 🔐 **File permissions**: Wallet files have 0600 permissions (owner read/write only)
 - 🛡️ **API keys** are never logged or transmitted in plaintext

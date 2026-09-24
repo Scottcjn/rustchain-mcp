@@ -629,7 +629,7 @@ def create_wallet(agent_name: str, password: str = "") -> dict[str, Any]:
         "wallet_id": wallet_id,
         "address": address,
         "public_key": keystore_data["public_key"],
-        "message": f"Wallet created for '{agent_name}'. Store your seed phrase securely!",
+        "message": f"Wallet created for '{agent_name}'. Recovery material is stored encrypted in the local keystore; use wallet_export for backup.",
         # NOTE: In a real scenario, the mnemonic would be shown ONCE to the user
         # and never stored. Here we omit it for security.
     }
