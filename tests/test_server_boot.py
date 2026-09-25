@@ -176,3 +176,65 @@ def test_tool_input_validation_is_enforced_by_the_protocol():
 
     with pytest.raises(ToolError):
         _run(_call())
+
+
+# ── Tool annotations ───────────────────────────────────────────────
+
+# Tools that move funds or hand out key material: clients must treat them as
+# destructive (and so ask the user before running them).
+DESTRUCTIVE_TOOLS = {"wallet_transfer_signed", "rustchain_transfer_signed", "wallet_export"}
+
+# Tools that only touch the local keystore, never the network.
+LOCAL_ONLY_TOOLS = {"wallet_create", "wallet_list", "wallet_export", "wallet_import"}
+
+
+def _hints(tool) -> dict:
+    """Annotations as camelCase keys (fastmcp 3.x and 4.x name the fields differently)."""
+    if tool.annotations is None:
+        return {}
+    return tool.annotations.model_dump(by_alias=True)
+
+
+def _listed_tools():
+    async def _list():
+        async with _client() as client:
+            return await client.list_tools()
+
+    return {tool.name: _hints(tool) for tool in _run(_list())}
+
+
+def test_every_tool_declares_annotations():
+    tools = _listed_tools()
+    missing = [
+        name for name, ann in tools.items()
+        if ann.get("readOnlyHint") is None or ann.get("openWorldHint") is None
+    ]
+    assert missing == [], f"tools without readOnly/openWorld annotations: {sorted(missing)}"
+
+    for name, ann in tools.items():
+        if not ann["readOnlyHint"]:
+            # destructiveHint defaults to true in the spec; writes must say.
+            assert ann.get("destructiveHint") is not None, name
+        assert ann["openWorldHint"] is (name not in LOCAL_ONLY_TOOLS), name
+
+
+def test_fund_moving_and_key_export_tools_are_destructive():
+    tools = _listed_tools()
+    for name in DESTRUCTIVE_TOOLS:
+        ann = tools[name]
+        assert ann["readOnlyHint"] is False, name
+        assert ann["destructiveHint"] is True, name
+        assert ann["idempotentHint"] is False, name
+
+    others = [
+        name for name, ann in tools.items()
+        if name not in DESTRUCTIVE_TOOLS and ann.get("destructiveHint")
+    ]
+    assert others == [], f"unexpected destructive tools: {others}"
+
+
+def test_pure_reads_are_read_only():
+    tools = _listed_tools()
+    for name in ("rustchain_health", "rustchain_balance", "wallet_balance",
+                 "wallet_history", "wallet_list", "bounty_search", "network_health"):
+        assert tools[name]["readOnlyHint"] is True, name
