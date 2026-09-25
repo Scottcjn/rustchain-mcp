@@ -381,6 +381,33 @@ class TestWalletImport:
         assert result["skipped_existing"] == ["taken-json"]
         assert (temp_keystore / "taken-json.json").read_text() == before
 
+    @pytest.mark.parametrize("bad_id", ["../escape", "../../etc/evil", "/abs/path", "a/b", ".hidden", "..", ""])
+    def test_import_seed_rejects_unsafe_wallet_id(self, temp_keystore, bad_id):
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        result = rustchain_crypto.import_wallet(seed_phrase, bad_id or "/", "pass-123")
+
+        assert "Invalid wallet_id" in result["error"]
+        assert not any(temp_keystore.parent.rglob("*escape*"))
+        assert not any(temp_keystore.parent.parent.rglob("evil.json"))
+
+    def test_import_keystore_json_skips_unsafe_wallet_id(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "../escape", "address": "RTCx", "encrypted_private_key": "x",
+             "encrypted_mnemonic": "y"},
+        ]})
+
+        result = rustchain_crypto.import_wallet(source, "", "new-pass")
+
+        assert result["wallets_imported"] == 0
+        assert result["skipped_invalid_id"] == ["../escape"]
+        assert not (temp_keystore.parent / "escape.json").exists()
+
+    def test_load_wallet_rejects_unsafe_wallet_id(self, temp_keystore):
+        temp_keystore.parent.mkdir(parents=True, exist_ok=True)
+        outside = temp_keystore.parent / "outside.json"
+        outside.write_text("{}")
+        assert rustchain_crypto.load_wallet("../outside", "") is None
+
     def test_import_from_keystore_json(self, temp_keystore):
         """Test importing from keystore JSON."""
         # First create a wallet to export

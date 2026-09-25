@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Optional
@@ -570,6 +571,20 @@ def get_keystore_path() -> Path:
     return Path.home() / ".rustchain" / "mcp_wallets"
 
 
+_WALLET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _wallet_file(keystore_path: Path, wallet_id: str) -> Optional[Path]:
+    """Keystore file for ``wallet_id``, or None if the ID is not a safe filename.
+
+    Wallet IDs reach here from tool arguments and from imported keystore JSON,
+    so they must not be able to name a path outside the keystore directory.
+    """
+    if not isinstance(wallet_id, str) or not _WALLET_ID_RE.match(wallet_id) or ".." in wallet_id:
+        return None
+    return keystore_path / f"{wallet_id}.json"
+
+
 def ensure_keystore_exists() -> Path:
     """Ensure the keystore directory exists, create if necessary."""
     keystore_path = get_keystore_path()
@@ -699,9 +714,9 @@ def load_wallet(wallet_id: str, password: str = "") -> Optional[dict[str, Any]]:
     funds stay reachable) and the result carries ``legacy_wallet_id_key=True``.
     """
     keystore_path = get_keystore_path()
-    wallet_file = keystore_path / f"{wallet_id}.json"
+    wallet_file = _wallet_file(keystore_path, wallet_id)
     
-    if not wallet_file.exists():
+    if wallet_file is None or not wallet_file.exists():
         return None
     
     try:
@@ -737,8 +752,8 @@ def get_wallet_address(wallet_id: str) -> Optional[str]:
 
     Returns None if the wallet is not in the keystore or the file is unreadable.
     """
-    wallet_file = get_keystore_path() / f"{wallet_id}.json"
-    if not wallet_file.is_file():
+    wallet_file = _wallet_file(get_keystore_path(), wallet_id)
+    if wallet_file is None or not wallet_file.is_file():
         return None
     try:
         with open(wallet_file, 'r') as f:
@@ -848,11 +863,15 @@ def import_wallet(
         
         imported_count = 0
         skipped_existing = []
+        skipped_invalid = []
         for wallet_data in wallets_to_import:
             target_id = wallet_id or wallet_data.get("wallet_id", f"imported-{__import__('time').time()}")
             
             keystore_path = ensure_keystore_exists()
-            wallet_file = keystore_path / f"{target_id}.json"
+            wallet_file = _wallet_file(keystore_path, target_id)
+            if wallet_file is None:
+                skipped_invalid.append(str(target_id))
+                continue
             
             # Re-encrypt with new password
             keystore_data = {
@@ -890,6 +909,11 @@ def import_wallet(
                 f"; skipped {len(skipped_existing)} that already exist "
                 "(existing wallets are never overwritten)"
             )
+        if skipped_invalid:
+            result["skipped_invalid_id"] = skipped_invalid
+            result["message"] += (
+                f"; skipped {len(skipped_invalid)} with an invalid wallet_id"
+            )
         return result
     except json.JSONDecodeError:
         pass
@@ -911,7 +935,9 @@ def import_wallet(
 
         # Store in keystore
         keystore_path = ensure_keystore_exists()
-        wallet_file = keystore_path / f"{wallet_id}.json"
+        wallet_file = _wallet_file(keystore_path, wallet_id)
+        if wallet_file is None:
+            return {"error": f"Invalid wallet_id {wallet_id!r}: use letters, digits, '.', '_' or '-'"}
 
         keystore_data = {
             "version": 1,
