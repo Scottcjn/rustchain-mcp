@@ -7,6 +7,14 @@ from tests.mocks.mock_beacon import MockBeaconService, setup_beacon_mocks
 from tests.mocks.mock_bottube import MockBoTTubeService, setup_bottube_mocks
 
 
+def _pin_hour(monkeypatch, hour=0):
+    """generate_onboarding_post() rotates templates by UTC hour; pin it so
+    tests that expect the live-stats template don't fail in odd hours."""
+    mock_datetime = Mock()
+    mock_datetime.now.return_value = Mock(hour=hour)
+    monkeypatch.setattr(evangelist_agent, "datetime", mock_datetime)
+
+
 class TestGenerateOnboardingPost:
     """Tests for generate_onboarding_post() function."""
     
@@ -20,6 +28,7 @@ class TestGenerateOnboardingPost:
             Mock(status_code=200, json=lambda: {"agents": 150, "videos": 900, "total_views": 60000})
         ]
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
+        _pin_hour(monkeypatch)
         
         post = evangelist_agent.generate_onboarding_post()
         
@@ -37,6 +46,7 @@ class TestGenerateOnboardingPost:
         mock_client = Mock()
         mock_client.get.side_effect = Exception("API unavailable")
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
+        _pin_hour(monkeypatch)
         
         post = evangelist_agent.generate_onboarding_post()
         
