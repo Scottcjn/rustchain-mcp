@@ -32,7 +32,7 @@ import time
 import httpx
 from fastmcp import FastMCP
 
-from . import rustchain_crypto
+from . import bottube_media, rustchain_crypto
 from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_total
 
 
@@ -787,40 +787,93 @@ def bottube_agent_profile(agent_name: str) -> dict:
 @mcp.tool()
 def bottube_upload(
     title: str,
-    video_url: str,
+    video_url: str = "",
     description: str = "",
     tags: str = "",
     api_key: str = "",
+    video_path: str = "",
+    category: str = "",
 ) -> dict:
-    """Upload a video to BoTTube.
+    """Upload a video to BoTTube as a multipart file upload.
+
+    Provide exactly one source:
+        video_path: Path to a local video file (.mp4, .webm, .avi, .mkv, .mov).
+        video_url: Public http(s) URL. The file is downloaded to a temporary
+            file (size-capped, timed out, public hosts only) and then uploaded;
+            BoTTube itself does not fetch URLs.
 
     Args:
-        title: Video title (max 200 chars)
-        video_url: URL of the video file to upload
-        description: Video description
-        tags: Comma-separated tags (e.g., "ai,rustchain,tutorial")
-        api_key: BoTTube API key for authentication. Get one at bottube.ai
+        title: Video title (required, max 200 chars)
+        video_url: Public URL of the video file (see above)
+        description: Video description (max 2000 chars)
+        tags: Comma-separated tags, max 15, each max 40 chars (e.g. "ai,rustchain")
+        api_key: BoTTube API key (sent as X-API-Key). Falls back to the
+            BOTTUBE_API_KEY environment variable. Get one at bottube.ai
+        video_path: Local file path of the video (see above)
+        category: Optional BoTTube category id (server default: "other")
 
-    Returns upload result with video ID and watch URL.
-    Agents earn RTC tokens for content that gets views.
+    Returns BoTTube's response (ok, video_id, watch_url, stream_url, duration_sec, ...)
+    with an absolute watch_url, or {"ok": false, "error": ...} describing
+    what went wrong. BoTTube limits uploads to 5/hour and 15/day per agent.
     """
-    headers = {}
-    if api_key:
-        headers["X-API-Key"] = api_key
+    key = (api_key or os.environ.get("BOTTUBE_API_KEY", "")).strip()
+    if not key:
+        return {
+            "ok": False,
+            "error": "BoTTube API key required: pass api_key or set BOTTUBE_API_KEY. Get one at bottube.ai",
+        }
+    video_path = (video_path or "").strip()
+    video_url = (video_url or "").strip()
+    if bool(video_path) == bool(video_url):
+        return {"ok": False, "error": "provide exactly one of video_path (local file) or video_url"}
 
-    payload = {
-        "title": title,
-        "video_url": video_url,
-        "description": description,
-        "tags": tags,
-    }
-    r = get_client().post(
-        f"{BOTTUBE_URL}/api/upload",
-        json=payload,
-        headers=headers,
+    limit = bottube_media.max_upload_bytes()
+    tmp_path = None
+    try:
+        fields = bottube_media.validate_metadata(title, description, tags, category)
+        if video_path:
+            file_path = bottube_media.resolve_local_file(video_path, limit)
+            filename = file_path.name
+        else:
+            with _bottube_download_client() as dl_client:
+                tmp_path, filename = bottube_media.download_to_temp(video_url, limit, dl_client)
+            file_path = tmp_path
+        result = bottube_media.post_multipart(
+            get_client(),
+            f"{BOTTUBE_URL}/api/upload",
+            key,
+            fields,
+            file_path,
+            filename,
+            bottube_media.upload_timeout(),
+        )
+    except bottube_media.UploadError as exc:
+        return {"ok": False, "error": str(exc), **exc.extra}
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "timed out downloading video_url; raise BOTTUBE_DOWNLOAD_TIMEOUT or use video_path"}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"downloading video_url failed: {type(exc).__name__}: {exc}"}
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    watch = result.get("watch_url")
+    if isinstance(watch, str) and watch.startswith("/"):
+        result["watch_url"] = f"{BOTTUBE_URL}{watch}"
+    return result
+
+
+def _bottube_download_client() -> httpx.Client:
+    """Client for fetching a video_url: standard TLS verification, no auto-redirects.
+
+    Redirects are followed manually in bottube_media.download_to_temp so each
+    hop is re-checked against the public-address rule.
+    """
+    return httpx.Client(
+        timeout=bottube_media.download_timeout(),
+        follow_redirects=False,
+        headers={"User-Agent": "rustchain-mcp (bottube_upload)"},
     )
-    r.raise_for_status()
-    return r.json()
 
 
 @mcp.tool()

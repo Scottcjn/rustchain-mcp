@@ -458,45 +458,6 @@
       }
     ]
   },
-  "bottube_upload": {
-    "args": {
-      "title": "t",
-      "video_url": "https://cdn.test/v.mp4",
-      "description": "d",
-      "tags": "a,b",
-      "api_key": "k"
-    },
-    "responses": [
-      {
-        "status": 200,
-        "body": {
-          "ok": true,
-          "amount_rtc": 5.0,
-          "miner_id": "x",
-          "miners": [],
-          "items": [],
-          "agents": [],
-          "relay": true,
-          "version": "fixture"
-        }
-      }
-    ],
-    "requests": [
-      {
-        "method": "POST",
-        "url": "https://bottube.test/api/upload",
-        "json": {
-          "title": "t",
-          "video_url": "https://cdn.test/v.mp4",
-          "description": "d",
-          "tags": "a,b"
-        },
-        "headers": {
-          "X-API-Key": "k"
-        }
-      }
-    ]
-  },
   "bottube_vote": {
     "args": {
       "video_id": "vid1",
