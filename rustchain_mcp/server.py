@@ -32,7 +32,7 @@ import time
 import httpx
 from fastmcp import FastMCP
 
-from . import bottube_media, rustchain_crypto
+from . import __version__, bottube_media, rustchain_crypto
 from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_total
 
 
@@ -51,6 +51,8 @@ RUSTCHAIN_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT", "30"))
 # ── MCP Server ─────────────────────────────────────────────────
 mcp = FastMCP(
     "RustChain + BoTTube + Beacon",
+    # Report this package's version in serverInfo, not fastmcp's.
+    version=__version__,
     instructions=(
         "AI agent tools for the RustChain Proof-of-Antiquity blockchain, "
         "BoTTube AI-native video platform, and Beacon agent-to-agent "

@@ -118,6 +118,20 @@ def test_client_lists_every_documented_tool():
     assert not extra, f"tools registered but undocumented: {sorted(extra)}"
 
 
+def test_server_info_reports_package_version():
+    """serverInfo.version is this package's version, not fastmcp's."""
+    from importlib.metadata import version
+
+    async def _info():
+        async with _client() as client:
+            # fastmcp 4 exposes server_info; 3.x only has initialize_result.
+            info = getattr(client, "server_info", None)
+            return info if info is not None else client.initialize_result.serverInfo
+
+    info = _run(_info())
+    assert info.version == rustchain_mcp.__version__ == version("rustchain-mcp")
+
+
 def test_client_lists_every_documented_resource():
     async def _list():
         async with _client() as client:
