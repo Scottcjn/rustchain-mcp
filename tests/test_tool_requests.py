@@ -70,10 +70,6 @@ CASES: dict[str, dict[str, Any]] = {
     "bottube_search": {"query": "vintage", "page": 2},
     "bottube_trending": {"limit": 500},
     "bottube_agent_profile": {"agent_name": "sophia-elya"},
-    "bottube_upload": {
-        "title": "t", "video_url": "https://cdn.test/v.mp4",
-        "description": "d", "tags": "a,b", "api_key": "k",
-    },
     "bottube_comment": {"video_id": "vid1", "content": "hello", "api_key": "k"},
     "bottube_vote": {"video_id": "vid1", "direction": "down", "api_key": "k"},
     "beacon_discover": {"provider": "anthropic", "capability": "coding"},
@@ -268,6 +264,7 @@ def test_every_network_tool_has_a_case():
         "rustchain_events",        # event relay; see test_event_relay
         "network_health",          # dynamic node list; see test_ecosystem_tools
         "legend_of_elya_info",     # static info + optional GitHub call
+        "bottube_upload",          # multipart file upload; see test_bottube_upload
     }
     missing = registered - local_only - set(CASES)
     assert not missing, f"network tools without a request fixture: {sorted(missing)}"

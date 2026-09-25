@@ -9,6 +9,8 @@ import rustchain_mcp.server as srv
 
 
 class _Resp:
+    status_code = 200
+
     def __init__(self, payload):
         self._p = payload
 
@@ -65,8 +67,10 @@ def test_agent_profile_hits_live_path(rec):
     assert url.endswith("/api/agents/sophia-elya") and "/api/v1/" not in url
 
 
-def test_upload_path_and_xapikey_header(rec):
-    srv.bottube_upload("t", "http://v", api_key="secret")
+def test_upload_path_and_xapikey_header(rec, tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x00" * 16)
+    srv.bottube_upload("t", video_path=str(video), api_key="secret")
     m, url, _, headers = _last(rec)
     assert m == "POST" and url.endswith("/api/upload")
     assert headers.get("X-API-Key") == "secret" and "Authorization" not in headers
