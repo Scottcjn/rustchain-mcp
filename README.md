@@ -294,7 +294,7 @@ imported = wallet_import(
 `rustchain-mcp` is built on FastMCP and standard MCP JSON-RPC protocol:
 
 - **Execution Model:** MCP tools execute synchronously (request/response) per MCP specification. Each tool call blocks until the node or API operation completes.
-- **Progress Reporting:** Long-running operations (such as large epoch scans, video uploads, or blockchain syncing) support progress context via MCP `Context` parameter (`ctx.report_progress(current, total)`).
+- **Progress Reporting:** FastMCP supports progress notifications when a tool explicitly accepts a `Context`, but the current built-in `rustchain-mcp` tools do **not** accept a `Context` and therefore do not call `ctx.report_progress()`. Calls return one complete result. For event-style incremental consumption, use `rustchain_events` with `next_cursor` or the separate SSE event relay described in [Event Relay and Progressive Results](docs/event-relay.md).
 - **Timeouts:** HTTP network calls to RustChain, BoTTube, and Beacon use configurable timeouts controlled by `RUSTCHAIN_TIMEOUT` (default: 30 seconds).
 
 ```python
