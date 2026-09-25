@@ -372,7 +372,7 @@ def rustchain_balance(wallet_id: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def wallet_create(agent_name: str, password: str = "") -> dict:
+def wallet_create(agent_name: str, password: str) -> dict:
     """Create a new Ed25519 wallet with BIP39 seed phrase.
 
     Generates a new wallet with secure key storage in ~/.rustchain/mcp_wallets/.
@@ -380,12 +380,17 @@ def wallet_create(agent_name: str, password: str = "") -> dict:
 
     Args:
         agent_name: Name for the wallet (e.g., "my-agent", "trading-bot")
-        password: Optional password to encrypt the keystore (default: use wallet_id)
+        password: Password that encrypts the keystore (required). It is needed
+                  again for wallet_transfer_signed and cannot be recovered.
 
     Returns wallet_id, address, and public_key.
+    Refuses to overwrite an existing wallet with the same wallet_id.
     NOTE: Seed phrase is encrypted and stored securely - never exposed in responses!
     """
-    result = rustchain_crypto.create_wallet(agent_name, password)
+    try:
+        result = rustchain_crypto.create_wallet(agent_name, password)
+    except ValueError as e:
+        return {"error": str(e)}
     return {
         "wallet_id": result["wallet_id"],
         "address": result["address"],
@@ -407,9 +412,9 @@ def wallet_balance(wallet_id: str) -> dict:
     Returns the balance in RTC (amount_rtc plus compatibility aliases).
     No fiat equivalent is returned: RTC is not sold or listed.
     """
-    # First check if wallet exists in local keystore
-    wallet = rustchain_crypto.load_wallet(wallet_id)
-    address = wallet["address"] if wallet else wallet_id
+    # First check if wallet exists in local keystore (public data only, no
+    # decryption: password-protected wallets need no password to read a balance)
+    address = rustchain_crypto.get_wallet_address(wallet_id) or wallet_id
 
     return _get_rustchain_balance(address)
 
@@ -427,8 +432,7 @@ def wallet_history(wallet_id: str, limit: int = 20) -> dict:
 
     Returns list of transactions with type, amount, timestamp, and counterparty.
     """
-    wallet = rustchain_crypto.load_wallet(wallet_id)
-    address = wallet["address"] if wallet else wallet_id
+    address = rustchain_crypto.get_wallet_address(wallet_id) or wallet_id
     
     r = get_client().get(
         f"{RUSTCHAIN_NODE}/wallet/history",
@@ -455,7 +459,8 @@ def wallet_transfer_signed(
         from_wallet_id: Source wallet ID (must exist in local keystore)
         to_address: Destination RTC address (e.g., "RTCabc123...")
         amount_rtc: Amount to transfer in RTC
-        password: Password to decrypt the keystore (if set during creation)
+        password: Password that decrypts the keystore (empty only for legacy
+                  wallets created before passwords were required)
         memo: Optional memo for the transaction
 
     Returns transfer result with transaction ID and new balance.
@@ -502,7 +507,7 @@ def wallet_transfer_signed(
         nonce=nonce,
     )
     
-    return {
+    response = {
         "success": True,
         "transaction_id": result.get("transaction_id"),
         "from_address": wallet["address"],
@@ -511,6 +516,13 @@ def wallet_transfer_signed(
         "memo": memo,
         "new_balance": result.get("new_balance"),
     }
+    if wallet.get("legacy_wallet_id_key"):
+        response["warning"] = (
+            f"Wallet '{from_wallet_id}' was created without a password: its keystore is "
+            "keyed by its own wallet_id and is effectively unencrypted. Move the funds "
+            "to a new password-protected wallet (wallet_create with a password)."
+        )
+    return response
 
 
 @mcp.tool()
@@ -532,19 +544,22 @@ def wallet_list() -> dict:
 
 
 @mcp.tool()
-def wallet_export(password: str = "") -> dict:
+def wallet_export(password: str) -> dict:
     """Export encrypted keystore JSON for backup.
 
     Creates an encrypted backup of all wallets in the local keystore.
     The export is encrypted with the provided password.
 
     Args:
-        password: Password to encrypt the export (default: "rustchain-mcp-export")
+        password: Password to encrypt the export (required)
 
     Returns encrypted keystore JSON (base64-encoded) and wallet count.
     STORE THIS SECURELY - it contains all your wallet data!
     """
-    result = rustchain_crypto.export_keystore(password)
+    try:
+        result = rustchain_crypto.export_keystore(password)
+    except ValueError as e:
+        return {"error": str(e)}
     return {
         "encrypted_keystore": result["encrypted_keystore"],
         "wallet_count": result["wallet_count"],
@@ -565,9 +580,11 @@ def wallet_import(
         source: Either a BIP39 seed phrase (12-24 words) or
                 encrypted keystore JSON string from wallet_export
         wallet_id: Desired wallet ID (optional, auto-generated if not provided)
-        password: Password for encrypted keystore or seed phrase
+        password: Password that encrypts the imported keystore (required;
+                  an empty password is rejected)
 
     Returns imported wallet info (wallet_id, address).
+    Refuses to overwrite an existing wallet with the same wallet_id.
     """
     result = rustchain_crypto.import_wallet(source, wallet_id, password)
     return result
