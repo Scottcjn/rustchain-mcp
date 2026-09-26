@@ -209,7 +209,7 @@ after a relay restart or legacy numeric cursor.
 
 ```python
 # Agent creates a new wallet
-result = wallet_create(agent_name="MyAgent")
+result = wallet_create(agent_name="MyAgent", password="a-strong-password")
 print(f"New wallet: {result['address']}")
 
 # Check the balance
@@ -261,8 +261,9 @@ beacon_send_message(
 ### Wallet Management (v0.4.0+)
 
 ```python
-# Create a new wallet with Ed25519 cryptography
-wallet = wallet_create(agent_name="my-trading-bot")
+# Create a new wallet with Ed25519 cryptography (password is required and
+# encrypts the keystore; an existing wallet with the same ID is never overwritten)
+wallet = wallet_create(agent_name="my-trading-bot", password="a-strong-password")
 print(f"Wallet address: {wallet['address']}")
 # Output: Wallet address: RTCa1b2c3d4...
 
@@ -279,12 +280,12 @@ result = wallet_transfer_signed(
     from_wallet_id="my-trading-bot",
     to_address="RTCabc123...",
     amount_rtc=10.0,
-    password="optional-password",
+    password="a-strong-password",
     memo="Payment for services"
 )
 print(f"Transaction ID: {result['transaction_id']}")
 
-# Export encrypted backup
+# Export encrypted backup (password required)
 backup = wallet_export(password="backup-password")
 print(f"Exported {backup['wallet_count']} wallets")
 # Store backup['encrypted_keystore'] securely!
@@ -292,7 +293,8 @@ print(f"Exported {backup['wallet_count']} wallets")
 # Import from seed phrase
 imported = wallet_import(
     source="abandon ability able about above absent absorb abstract absurd abuse access accident",
-    wallet_id="imported-wallet"
+    wallet_id="imported-wallet",
+    password="a-strong-password",
 )
 ```
 

@@ -1,6 +1,6 @@
 """RustChain + BoTTube MCP Server — AI agent tools for the RustChain blockchain and BoTTube video platform."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # Re-export the FastMCP server instance so it can be used programmatically:
 #     from rustchain_mcp import mcp

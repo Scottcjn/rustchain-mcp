@@ -64,7 +64,7 @@ def _node_reconstruct(payload: dict) -> bytes:
 
 
 def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
-    rustchain_crypto.create_wallet("signed-fmt-sender", password="")
+    rustchain_crypto.create_wallet("signed-fmt-sender", password="fmt-pass")
     captured = {}
 
     resp = mock.Mock()
@@ -92,7 +92,7 @@ def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
             from_wallet_id="signed-fmt-sender",
             to_address="RTC" + "b" * 40,
             amount_rtc=amount_rtc,
-            password="",
+            password="fmt-pass",
             memo=memo,
         )
     return captured["payload"]

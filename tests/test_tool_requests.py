@@ -192,7 +192,7 @@ def _run_tool(name: str, args: dict[str, Any], responses: list[dict[str, Any]]):
     patches.append(mock.patch.object(server, "get_client", return_value=client))
     # Keep the keystore out of it: tools that accept a wallet_id fall back to
     # treating it as an address when no local wallet exists.
-    patches.append(mock.patch.object(server.rustchain_crypto, "load_wallet", return_value=None))
+    patches.append(mock.patch.object(server.rustchain_crypto, "get_wallet_address", return_value=None))
     with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)

@@ -108,16 +108,99 @@ class TestWalletCreate:
     
     def test_create_wallet_slugifies_name(self, temp_keystore):
         """Test that wallet name is properly slugified."""
-        result = rustchain_crypto.create_wallet("My Test Agent!", "")
+        result = rustchain_crypto.create_wallet("My Test Agent!", "test-pass")
         
         assert result["wallet_id"] == "my-test-agent"
     
-    def test_create_wallet_no_password(self, temp_keystore):
-        """Test wallet creation without password."""
-        result = rustchain_crypto.create_wallet("no-password-agent", "")
-        
-        assert result["wallet_id"] == "no-password-agent"
-        assert result["address"].startswith("RTC")
+    def test_create_wallet_no_password_rejected(self, temp_keystore):
+        """A wallet without a password would only look encrypted: refuse it."""
+        with pytest.raises(ValueError, match="password is required"):
+            rustchain_crypto.create_wallet("no-password-agent", "")
+
+        assert not (temp_keystore / "no-password-agent.json").exists()
+
+    def test_create_wallet_refuses_to_overwrite_slug_collision(self, temp_keystore):
+        """'My Agent' and 'my_agent' share a wallet_id; the second must not clobber the first."""
+        first = rustchain_crypto.create_wallet("My Agent", "pass-one")
+
+        with pytest.raises(ValueError, match="already exists"):
+            rustchain_crypto.create_wallet("my_agent", "pass-two")
+
+        wallet = rustchain_crypto.load_wallet("my-agent", "pass-one")
+        assert wallet is not None
+        assert wallet["address"] == first["address"]
+
+    def test_create_wallet_empty_slug_rejected(self, temp_keystore):
+        with pytest.raises(ValueError):
+            rustchain_crypto.create_wallet("!!!", "test-pass")
+
+    def test_keystore_not_decryptable_with_wallet_id(self, temp_keystore):
+        """The key must not be recoverable from the plaintext wallet_id in the file."""
+        rustchain_crypto.create_wallet("real-crypto", "strong-pass")
+        data = json.loads((temp_keystore / "real-crypto.json").read_text())
+
+        assert data["password_protected"] is True
+        from cryptography.fernet import InvalidToken
+
+        with pytest.raises(InvalidToken):
+            rustchain_crypto._decrypt_data(data["encrypted_mnemonic"], data["wallet_id"])
+        assert rustchain_crypto.load_wallet("real-crypto", "") is None
+        assert rustchain_crypto.load_wallet("real-crypto", "strong-pass") is not None
+
+
+def _write_legacy_keystore(keystore_dir: Path, wallet_id: str) -> dict:
+    """Write a keystore the way pre-fix versions did with no password (keyed by wallet_id)."""
+    mnemonic = rustchain_crypto._generate_mnemonic()
+    private_key, public_key = rustchain_crypto._seed_to_ed25519_keypair(
+        rustchain_crypto._mnemonic_to_seed(mnemonic)
+    )
+    data = {
+        "version": 1,
+        "wallet_id": wallet_id,
+        "address": rustchain_crypto._derive_wallet_address(public_key),
+        "public_key": rustchain_crypto._bytes_to_hex(public_key),
+        "encrypted_private_key": rustchain_crypto._encrypt_data(
+            rustchain_crypto._bytes_to_hex(private_key), wallet_id
+        ),
+        "encrypted_mnemonic": rustchain_crypto._encrypt_data(mnemonic, wallet_id),
+        "created_at": 1700000000,
+    }
+    keystore_dir.mkdir(parents=True, exist_ok=True)
+    (keystore_dir / f"{wallet_id}.json").write_text(json.dumps(data))
+    return data
+
+
+class TestLegacyKeystores:
+    """Keystores written before passwords were required must keep working."""
+
+    def test_legacy_wallet_id_keystore_still_loads(self, temp_keystore):
+        legacy = _write_legacy_keystore(temp_keystore, "old-agent")
+
+        wallet = rustchain_crypto.load_wallet("old-agent", "")
+
+        assert wallet is not None
+        assert wallet["address"] == legacy["address"]
+        assert wallet["legacy_wallet_id_key"] is True
+
+    def test_legacy_transfer_succeeds_with_warning(self, temp_keystore):
+        from rustchain_mcp.server import wallet_transfer_signed
+
+        _write_legacy_keystore(temp_keystore, "old-sender")
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"transaction_id": "tx1", "new_balance": 1.0}
+        mock_response.raise_for_status = mock.Mock()
+
+        with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
+            mock_client_fn.return_value.post.return_value = mock_response
+            result = wallet_transfer_signed(
+                from_wallet_id="old-sender",
+                to_address="RTCrecipient0000",
+                amount_rtc=1.0,
+                password="",
+            )
+
+        assert result["success"] is True
+        assert "effectively unencrypted" in result["warning"]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -149,9 +232,9 @@ class TestWalletList:
     
     def test_list_wallets_with_multiple_wallets(self, temp_keystore):
         """Test listing wallets with multiple wallets."""
-        rustchain_crypto.create_wallet("wallet-one", "")
-        rustchain_crypto.create_wallet("wallet-two", "")
-        rustchain_crypto.create_wallet("wallet-three", "")
+        rustchain_crypto.create_wallet("wallet-one", "test-pass")
+        rustchain_crypto.create_wallet("wallet-two", "test-pass")
+        rustchain_crypto.create_wallet("wallet-three", "test-pass")
         
         wallets = rustchain_crypto.list_wallets()
         
@@ -191,14 +274,21 @@ class TestWalletExport:
     
     def test_export_wallets_with_data(self, temp_keystore):
         """Test exporting with wallets."""
-        rustchain_crypto.create_wallet("export-test-1", "")
-        rustchain_crypto.create_wallet("export-test-2", "")
+        rustchain_crypto.create_wallet("export-test-1", "test-pass")
+        rustchain_crypto.create_wallet("export-test-2", "test-pass")
         
         result = rustchain_crypto.export_keystore("export-password")
         
         assert result["wallet_count"] == 2
         assert len(result["encrypted_keystore"]) > 0
     
+    def test_export_requires_password(self, temp_keystore):
+        """No fixed fallback password ("rustchain-mcp-export") for exports."""
+        rustchain_crypto.create_wallet("export-nopass", "test-pass")
+
+        with pytest.raises(ValueError, match="password is required"):
+            rustchain_crypto.export_keystore("")
+
     def test_export_is_encrypted(self, temp_keystore):
         """Test that export is encrypted."""
         rustchain_crypto.create_wallet("secret-wallet", "wallet-pass")
@@ -231,7 +321,7 @@ class TestWalletImport:
         result = rustchain_crypto.import_wallet(
             seed_phrase,
             "imported-wallet",
-            ""
+            "import-pass"
         )
         
         assert "wallet_id" in result
@@ -243,7 +333,7 @@ class TestWalletImport:
         """Test importing from seed phrase with auto-generated ID."""
         seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
         
-        result = rustchain_crypto.import_wallet(seed_phrase, "", "")
+        result = rustchain_crypto.import_wallet(seed_phrase, "", "import-pass")
         
         assert "wallet_id" in result
         assert result["wallet_id"].startswith("imported-")
@@ -253,11 +343,125 @@ class TestWalletImport:
         # Invalid: not enough words
         invalid_seed = "abandon ability able"
         
-        result = rustchain_crypto.import_wallet(invalid_seed, "test", "")
+        result = rustchain_crypto.import_wallet(invalid_seed, "test", "import-pass")
         
         assert "error" in result
         assert "Invalid input" in result["error"]
     
+    def test_import_requires_password(self, temp_keystore):
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+
+        result = rustchain_crypto.import_wallet(seed_phrase, "no-pass-import", "")
+
+        assert "password is required" in result["error"]
+        assert not (temp_keystore / "no-pass-import.json").exists()
+
+    def test_import_seed_refuses_to_overwrite_existing_wallet(self, temp_keystore):
+        existing = rustchain_crypto.create_wallet("taken", "original-pass")
+        before = (temp_keystore / "taken.json").read_text()
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+
+        result = rustchain_crypto.import_wallet(seed_phrase, "taken", "other-pass")
+
+        assert "already exists" in result["error"]
+        assert (temp_keystore / "taken.json").read_text() == before
+        assert rustchain_crypto.load_wallet("taken", "original-pass")["address"] == existing["address"]
+
+    def test_import_keystore_json_refuses_to_overwrite_existing_wallet(self, temp_keystore):
+        rustchain_crypto.create_wallet("taken-json", "original-pass")
+        before = (temp_keystore / "taken-json.json").read_text()
+        source = json.dumps({"wallets": [
+            {"wallet_id": "taken-json", "address": "RTCother", "encrypted_private_key": "x",
+             "encrypted_mnemonic": "y"},
+        ]})
+
+        result = rustchain_crypto.import_wallet(source, "", "new-pass")
+
+        assert result["wallets_imported"] == 0
+        assert result["skipped_existing"] == ["taken-json"]
+        assert (temp_keystore / "taken-json.json").read_text() == before
+
+    @pytest.mark.parametrize("bad_id", ["../escape", "../../etc/evil", "/abs/path", "a/b", ".hidden", "..", ""])
+    def test_import_seed_rejects_unsafe_wallet_id(self, temp_keystore, bad_id):
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        result = rustchain_crypto.import_wallet(seed_phrase, bad_id or "/", "pass-123")
+
+        assert "Invalid wallet_id" in result["error"]
+        assert not any(temp_keystore.parent.rglob("*escape*"))
+        assert not any(temp_keystore.parent.parent.rglob("evil.json"))
+
+    @pytest.mark.parametrize("bad_id", ["abc\n", "abc\r\n", "abc\x00", " abc", "abc def"])
+    def test_wallet_id_must_match_completely(self, temp_keystore, bad_id):
+        assert rustchain_crypto._wallet_file(temp_keystore, bad_id) is None
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        result = rustchain_crypto.import_wallet(seed_phrase, bad_id, "pass-123")
+        assert "Invalid wallet_id" in result["error"]
+
+    def test_failed_write_leaves_no_keystore(self, temp_keystore):
+        with mock.patch.object(rustchain_crypto.json, "dump", side_effect=OSError(28, "No space left on device")):
+            with pytest.raises(OSError):
+                rustchain_crypto.create_wallet("half-written", "pass-123")
+
+        assert list(temp_keystore.iterdir()) == []
+        # The ID is still usable once the disk has room again
+        created = rustchain_crypto.create_wallet("half-written", "pass-123")
+        assert rustchain_crypto.load_wallet("half-written", "pass-123")["address"] == created["address"]
+        assert [f.name for f in temp_keystore.iterdir()] == ["half-written.json"]
+
+    def test_keystore_is_created_private(self, temp_keystore):
+        rustchain_crypto.create_wallet("private", "pass-123")
+        if os.name == "posix":
+            assert (temp_keystore / "private.json").stat().st_mode & 0o777 == 0o600
+
+    def test_batch_import_rejects_single_explicit_wallet_id(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "a", "address": "RTCa", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "b", "address": "RTCb", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+        ]})
+
+        result = rustchain_crypto.import_wallet(source, "same-id", "new-pass")
+
+        assert "single wallet" in result["error"]
+        assert not temp_keystore.exists() or list(temp_keystore.iterdir()) == []
+
+    def test_batch_import_reports_write_failures_and_continues(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "ok-1", "address": "RTC1", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "bad", "address": "RTC2", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "ok-2", "address": "RTC3", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+        ]})
+        real_write = rustchain_crypto._write_new_keystore
+
+        def flaky(wallet_file, data):
+            if wallet_file.stem == "bad":
+                raise OSError(28, "No space left on device")
+            return real_write(wallet_file, data)
+
+        with mock.patch.object(rustchain_crypto, "_write_new_keystore", flaky):
+            result = rustchain_crypto.import_wallet(source, "", "new-pass")
+
+        assert result["wallets_imported"] == 2
+        assert result["failed"] == [{"wallet_id": "bad", "error": "No space left on device"}]
+        assert sorted(f.name for f in temp_keystore.iterdir()) == ["ok-1.json", "ok-2.json"]
+
+    def test_import_keystore_json_skips_unsafe_wallet_id(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "../escape", "address": "RTCx", "encrypted_private_key": "x",
+             "encrypted_mnemonic": "y"},
+        ]})
+
+        result = rustchain_crypto.import_wallet(source, "", "new-pass")
+
+        assert result["wallets_imported"] == 0
+        assert result["skipped_invalid_id"] == ["../escape"]
+        assert not (temp_keystore.parent / "escape.json").exists()
+
+    def test_load_wallet_rejects_unsafe_wallet_id(self, temp_keystore):
+        temp_keystore.parent.mkdir(parents=True, exist_ok=True)
+        outside = temp_keystore.parent / "outside.json"
+        outside.write_text("{}")
+        assert rustchain_crypto.load_wallet("../outside", "") is None
+
     def test_import_from_keystore_json(self, temp_keystore):
         """Test importing from keystore JSON."""
         # First create a wallet to export
@@ -405,7 +609,7 @@ class TestWalletTransferSigned:
     
     def test_transfer_requires_wallet_in_keystore(self, temp_keystore):
         """Test that transfer requires wallet to exist in keystore."""
-        wallet = rustchain_crypto.load_wallet("nonexistent-wallet", "")
+        wallet = rustchain_crypto.load_wallet("nonexistent-wallet", "test-pass")
         
         assert wallet is None
 
@@ -501,7 +705,7 @@ class TestKeystoreSecurity:
     def test_keystore_directory_permissions(self, temp_keystore):
         """Test that keystore directory has restrictive permissions."""
         # Create a wallet to ensure directory exists
-        rustchain_crypto.create_wallet("test-perm-agent", "")
+        rustchain_crypto.create_wallet("test-perm-agent", "test-pass")
         
         # The directory should exist after creating a wallet
         keystore_path = rustchain_crypto.get_keystore_path()
@@ -607,7 +811,7 @@ class TestMCPServerWalletTools:
         """Test wallet_export MCP tool returns encrypted backup."""
         from rustchain_mcp.server import wallet_create, wallet_export
 
-        wallet_create(agent_name="export-agent", password="")
+        wallet_create(agent_name="export-agent", password="test-pass")
         result = wallet_export(password="backup-password")
 
         assert isinstance(result, dict)
@@ -616,6 +820,23 @@ class TestMCPServerWalletTools:
         assert "message" in result
         assert "warning" in result
         assert result["wallet_count"] == 1
+
+    def test_mcp_wallet_create_reports_errors(self, temp_keystore):
+        """Password and overwrite errors come back to the tool caller as an error."""
+        from rustchain_mcp.server import wallet_create
+
+        assert "password is required" in wallet_create(agent_name="tool-agent", password="")["error"]
+        wallet_create(agent_name="Tool Agent", password="pass-1")
+        result = wallet_create(agent_name="tool_agent", password="pass-2")
+        assert "already exists" in result["error"]
+
+    def test_mcp_wallet_export_requires_password(self, temp_keystore):
+        from rustchain_mcp.server import wallet_export
+
+        result = wallet_export(password="")
+
+        assert "password is required" in result["error"]
+        assert "encrypted_keystore" not in result
 
     def test_mcp_wallet_import_from_seed(self, temp_keystore):
         """Test wallet_import MCP tool imports from seed phrase."""
@@ -626,7 +847,7 @@ class TestMCPServerWalletTools:
             "abuse access accident"
         )
         result = wallet_import(
-            source=seed_phrase, wallet_id="seed-import-test", password=""
+            source=seed_phrase, wallet_id="seed-import-test", password="import-pass"
         )
 
         assert isinstance(result, dict)
@@ -636,7 +857,7 @@ class TestMCPServerWalletTools:
         """Test wallet_balance MCP tool with mocked HTTP response."""
         from rustchain_mcp.server import wallet_create, wallet_balance
 
-        created = wallet_create(agent_name="balance-agent", password="")
+        created = wallet_create(agent_name="balance-agent", password="test-pass")
 
         mock_response = mock.Mock()
         mock_response.json.return_value = {"amount_rtc": 42.0, "miner_id": "balance-agent"}
@@ -695,7 +916,7 @@ class TestMCPServerWalletTools:
         """Test wallet_history MCP tool with mocked HTTP response."""
         from rustchain_mcp.server import wallet_create, wallet_history
 
-        wallet_create(agent_name="history-agent", password="")
+        wallet_create(agent_name="history-agent", password="test-pass")
 
         mock_response = mock.Mock()
         mock_response.json.return_value = {
@@ -741,7 +962,7 @@ class TestMCPServerWalletTools:
         """Test wallet_transfer_signed with valid wallet and mocked network."""
         from rustchain_mcp.server import wallet_create, wallet_transfer_signed
 
-        wallet_create(agent_name="sender-wallet", password="")
+        wallet_create(agent_name="sender-wallet", password="test-pass")
 
         mock_response = mock.Mock()
         mock_response.json.return_value = {
@@ -760,7 +981,7 @@ class TestMCPServerWalletTools:
                 from_wallet_id="sender-wallet",
                 to_address="RTCrecipient0000",
                 amount_rtc=10.0,
-                password="",
+                password="test-pass",
                 memo="bounty payment",
             )
 
@@ -780,8 +1001,8 @@ class TestEd25519Signing:
         """Different messages produce different signatures."""
         from rustchain_mcp import rustchain_crypto
 
-        rustchain_crypto.create_wallet("sig-test-agent", "")
-        wallet = rustchain_crypto.load_wallet("sig-test-agent", "")
+        rustchain_crypto.create_wallet("sig-test-agent", "test-pass")
+        wallet = rustchain_crypto.load_wallet("sig-test-agent", "test-pass")
 
         sig1 = rustchain_crypto.sign_message(b"message one", wallet["private_key"])
         sig2 = rustchain_crypto.sign_message(b"message two", wallet["private_key"])
@@ -792,11 +1013,11 @@ class TestEd25519Signing:
         """Same message signed by different wallets produces different signatures."""
         from rustchain_mcp import rustchain_crypto
 
-        rustchain_crypto.create_wallet("signer-a", "")
-        rustchain_crypto.create_wallet("signer-b", "")
+        rustchain_crypto.create_wallet("signer-a", "test-pass")
+        rustchain_crypto.create_wallet("signer-b", "test-pass")
 
-        wallet_a = rustchain_crypto.load_wallet("signer-a", "")
-        wallet_b = rustchain_crypto.load_wallet("signer-b", "")
+        wallet_a = rustchain_crypto.load_wallet("signer-a", "test-pass")
+        wallet_b = rustchain_crypto.load_wallet("signer-b", "test-pass")
 
         msg = b"same message"
         sig_a = rustchain_crypto.sign_message(msg, wallet_a["private_key"])
@@ -810,7 +1031,7 @@ class TestEd25519Signing:
 
         wallets = []
         for i in range(5):
-            w = rustchain_crypto.create_wallet(f"unique-agent-{i}", "")
+            w = rustchain_crypto.create_wallet(f"unique-agent-{i}", "test-pass")
             wallets.append(w["address"])
 
         # All addresses should be unique

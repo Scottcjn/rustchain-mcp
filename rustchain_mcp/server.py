@@ -32,7 +32,7 @@ import time
 import httpx
 from fastmcp import FastMCP
 
-from . import bottube_media, rustchain_crypto
+from . import __version__, bottube_media, rustchain_crypto
 from .events import EventRelay, EventRelayConfig, RelayInputError, pagination_total
 
 
@@ -51,6 +51,8 @@ RUSTCHAIN_TIMEOUT = int(os.environ.get("RUSTCHAIN_TIMEOUT", "30"))
 # ── MCP Server ─────────────────────────────────────────────────
 mcp = FastMCP(
     "RustChain + BoTTube + Beacon",
+    # Report this package's version in serverInfo, not fastmcp's.
+    version=__version__,
     instructions=(
         "AI agent tools for the RustChain Proof-of-Antiquity blockchain, "
         "BoTTube AI-native video platform, and Beacon agent-to-agent "
@@ -59,6 +61,36 @@ mcp = FastMCP(
         "and participate in the agent economy."
     ),
 )
+
+# MCP tool annotations: behavior hints clients use to decide when to ask the
+# user for confirmation. Plain dicts with the spec's camelCase keys are accepted
+# by both fastmcp 3.x and 4.x. Per the MCP spec destructiveHint defaults to true
+# for non-read-only tools, so every write sets it explicitly.
+_READ_ONLY_REMOTE = {"readOnlyHint": True, "openWorldHint": True}
+_READ_ONLY_LOCAL = {"readOnlyHint": True, "openWorldHint": False}
+_WRITE_REMOTE = {
+    "readOnlyHint": False, "destructiveHint": False,
+    "idempotentHint": False, "openWorldHint": True,
+}
+_IDEMPOTENT_WRITE_REMOTE = {
+    "readOnlyHint": False, "destructiveHint": False,
+    "idempotentHint": True, "openWorldHint": True,
+}
+# Local keystore writes; they never overwrite an existing wallet.
+_WRITE_LOCAL = {
+    "readOnlyHint": False, "destructiveHint": False,
+    "idempotentHint": False, "openWorldHint": False,
+}
+# Exporting key material is treated as destructive so clients confirm it.
+_KEY_EXPORT_LOCAL = {
+    "readOnlyHint": False, "destructiveHint": True,
+    "idempotentHint": False, "openWorldHint": False,
+}
+# Moves funds irreversibly.
+_DESTRUCTIVE_REMOTE = {
+    "readOnlyHint": False, "destructiveHint": True,
+    "idempotentHint": False, "openWorldHint": True,
+}
 
 # TLS verification — secure by default, configurable for self-signed certs
 _TLS_RAW = os.environ.get("RUSTCHAIN_CA_BUNDLE",
@@ -205,7 +237,7 @@ def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) ->
 # https://github.com/createkr/Rustchain/tree/main/sdk
 # ═══════════════════════════════════════════════════════
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_health() -> dict:
     """Check RustChain node health status.
 
@@ -220,7 +252,7 @@ def rustchain_health() -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_epoch() -> dict:
     """Get current RustChain epoch information.
 
@@ -238,7 +270,7 @@ def rustchain_epoch() -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_miners() -> dict:
     """List a bounded first page of active RustChain miners.
 
@@ -280,7 +312,7 @@ def rustchain_miners() -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_events(
     after_cursor: str | int = "0",
     limit: int = 50,
@@ -331,7 +363,7 @@ def rustchain_events(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_IDEMPOTENT_WRITE_REMOTE)
 def rustchain_create_wallet(agent_name: str) -> dict:
     """Create a new RTC wallet for an AI agent. Zero friction onboarding.
 
@@ -350,7 +382,7 @@ def rustchain_create_wallet(agent_name: str) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_balance(wallet_id: str) -> dict:
     """Check RTC token balance for a wallet.
 
@@ -371,8 +403,8 @@ def rustchain_balance(wallet_id: str) -> dict:
 # 7 new tools for wallet management and signed transfers
 # ═══════════════════════════════════════════════════════════════
 
-@mcp.tool()
-def wallet_create(agent_name: str, password: str = "") -> dict:
+@mcp.tool(annotations=_WRITE_LOCAL)
+def wallet_create(agent_name: str, password: str) -> dict:
     """Create a new Ed25519 wallet with BIP39 seed phrase.
 
     Generates a new wallet with secure key storage in ~/.rustchain/mcp_wallets/.
@@ -380,12 +412,17 @@ def wallet_create(agent_name: str, password: str = "") -> dict:
 
     Args:
         agent_name: Name for the wallet (e.g., "my-agent", "trading-bot")
-        password: Optional password to encrypt the keystore (default: use wallet_id)
+        password: Password that encrypts the keystore (required). It is needed
+                  again for wallet_transfer_signed and cannot be recovered.
 
     Returns wallet_id, address, and public_key.
+    Refuses to overwrite an existing wallet with the same wallet_id.
     NOTE: Seed phrase is encrypted and stored securely - never exposed in responses!
     """
-    result = rustchain_crypto.create_wallet(agent_name, password)
+    try:
+        result = rustchain_crypto.create_wallet(agent_name, password)
+    except ValueError as e:
+        return {"error": str(e)}
     return {
         "wallet_id": result["wallet_id"],
         "address": result["address"],
@@ -394,7 +431,7 @@ def wallet_create(agent_name: str, password: str = "") -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def wallet_balance(wallet_id: str) -> dict:
     """Check RTC token balance for a local wallet.
 
@@ -407,14 +444,14 @@ def wallet_balance(wallet_id: str) -> dict:
     Returns the balance in RTC (amount_rtc plus compatibility aliases).
     No fiat equivalent is returned: RTC is not sold or listed.
     """
-    # First check if wallet exists in local keystore
-    wallet = rustchain_crypto.load_wallet(wallet_id)
-    address = wallet["address"] if wallet else wallet_id
+    # First check if wallet exists in local keystore (public data only, no
+    # decryption: password-protected wallets need no password to read a balance)
+    address = rustchain_crypto.get_wallet_address(wallet_id) or wallet_id
 
     return _get_rustchain_balance(address)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def wallet_history(wallet_id: str, limit: int = 20) -> dict:
     """Get transaction history for a wallet.
 
@@ -427,8 +464,7 @@ def wallet_history(wallet_id: str, limit: int = 20) -> dict:
 
     Returns list of transactions with type, amount, timestamp, and counterparty.
     """
-    wallet = rustchain_crypto.load_wallet(wallet_id)
-    address = wallet["address"] if wallet else wallet_id
+    address = rustchain_crypto.get_wallet_address(wallet_id) or wallet_id
     
     r = get_client().get(
         f"{RUSTCHAIN_NODE}/wallet/history",
@@ -438,7 +474,7 @@ def wallet_history(wallet_id: str, limit: int = 20) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_REMOTE)
 def wallet_transfer_signed(
     from_wallet_id: str,
     to_address: str,
@@ -455,7 +491,8 @@ def wallet_transfer_signed(
         from_wallet_id: Source wallet ID (must exist in local keystore)
         to_address: Destination RTC address (e.g., "RTCabc123...")
         amount_rtc: Amount to transfer in RTC
-        password: Password to decrypt the keystore (if set during creation)
+        password: Password that decrypts the keystore (empty only for legacy
+                  wallets created before passwords were required)
         memo: Optional memo for the transaction
 
     Returns transfer result with transaction ID and new balance.
@@ -502,7 +539,7 @@ def wallet_transfer_signed(
         nonce=nonce,
     )
     
-    return {
+    response = {
         "success": True,
         "transaction_id": result.get("transaction_id"),
         "from_address": wallet["address"],
@@ -511,9 +548,16 @@ def wallet_transfer_signed(
         "memo": memo,
         "new_balance": result.get("new_balance"),
     }
+    if wallet.get("legacy_wallet_id_key"):
+        response["warning"] = (
+            f"Wallet '{from_wallet_id}' was created without a password: its keystore is "
+            "keyed by its own wallet_id and is effectively unencrypted. Move the funds "
+            "to a new password-protected wallet (wallet_create with a password)."
+        )
+    return response
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_LOCAL)
 def wallet_list() -> dict:
     """List all wallets in the local keystore.
 
@@ -531,20 +575,23 @@ def wallet_list() -> dict:
     }
 
 
-@mcp.tool()
-def wallet_export(password: str = "") -> dict:
+@mcp.tool(annotations=_KEY_EXPORT_LOCAL)
+def wallet_export(password: str) -> dict:
     """Export encrypted keystore JSON for backup.
 
     Creates an encrypted backup of all wallets in the local keystore.
     The export is encrypted with the provided password.
 
     Args:
-        password: Password to encrypt the export (default: "rustchain-mcp-export")
+        password: Password to encrypt the export (required)
 
     Returns encrypted keystore JSON (base64-encoded) and wallet count.
     STORE THIS SECURELY - it contains all your wallet data!
     """
-    result = rustchain_crypto.export_keystore(password)
+    try:
+        result = rustchain_crypto.export_keystore(password)
+    except ValueError as e:
+        return {"error": str(e)}
     return {
         "encrypted_keystore": result["encrypted_keystore"],
         "wallet_count": result["wallet_count"],
@@ -553,7 +600,7 @@ def wallet_export(password: str = "") -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_LOCAL)
 def wallet_import(
     source: str,
     wallet_id: str = "",
@@ -565,15 +612,17 @@ def wallet_import(
         source: Either a BIP39 seed phrase (12-24 words) or
                 encrypted keystore JSON string from wallet_export
         wallet_id: Desired wallet ID (optional, auto-generated if not provided)
-        password: Password for encrypted keystore or seed phrase
+        password: Password that encrypts the imported keystore (required;
+                  an empty password is rejected)
 
     Returns imported wallet info (wallet_id, address).
+    Refuses to overwrite an existing wallet with the same wallet_id.
     """
     result = rustchain_crypto.import_wallet(source, wallet_id, password)
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bcos_verify(cert_id: str) -> dict:
     """Verify a BCOS v2 certificate by its ID.
 
@@ -588,7 +637,7 @@ def bcos_verify(cert_id: str) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_stats() -> dict:
     """Get RustChain network statistics.
 
@@ -630,7 +679,7 @@ def rustchain_stats() -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def rustchain_lottery_eligibility(miner_id: str) -> dict:
     """Check if a miner is eligible for epoch lottery rewards.
 
@@ -648,7 +697,7 @@ def rustchain_lottery_eligibility(miner_id: str) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bcos_directory(tier: str = "", limit: int = 20) -> dict:
     """Browse the BCOS v2 certificate directory.
 
@@ -668,7 +717,7 @@ def bcos_directory(tier: str = "", limit: int = 20) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_REMOTE)
 def rustchain_transfer_signed(
     from_address: str,
     to_address: str,
@@ -722,7 +771,7 @@ def rustchain_transfer_signed(
 # 850+ videos, 130+ AI agents, 60+ humans, 57K+ views
 # ═══════════════════════════════════════════════════════════════
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bottube_stats() -> dict:
     """Get BoTTube platform statistics.
 
@@ -735,7 +784,7 @@ def bottube_stats() -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bottube_search(query: str, page: int = 1) -> dict:
     """Search for videos on BoTTube.
 
@@ -753,7 +802,7 @@ def bottube_search(query: str, page: int = 1) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bottube_trending(limit: int = 10) -> dict:
     """Get trending videos on BoTTube.
 
@@ -770,7 +819,7 @@ def bottube_trending(limit: int = 10) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bottube_agent_profile(agent_name: str) -> dict:
     """Get an AI agent's profile on BoTTube.
 
@@ -784,7 +833,7 @@ def bottube_agent_profile(agent_name: str) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def bottube_upload(
     title: str,
     video_url: str = "",
@@ -876,7 +925,7 @@ def _bottube_download_client() -> httpx.Client:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
     """Post a comment on a BoTTube video.
 
@@ -900,7 +949,7 @@ def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dict:
     """Vote on a BoTTube video.
 
@@ -931,7 +980,7 @@ def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dic
 # without installing beacon-skill separately.
 # ═══════════════════════════════════════════════════════════════
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def beacon_discover(
     provider: str = "",
     capability: str = "",
@@ -971,7 +1020,7 @@ def beacon_discover(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def beacon_register(
     name: str,
     pubkey_hex: str,
@@ -1017,7 +1066,7 @@ def beacon_register(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def beacon_heartbeat(
     agent_id: str,
     relay_token: str,
@@ -1044,7 +1093,7 @@ def beacon_heartbeat(
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def beacon_agent_status(agent_id: str) -> dict:
     """Get detailed status of a specific Beacon agent.
 
@@ -1070,7 +1119,7 @@ def beacon_agent_status(agent_id: str) -> dict:
     return {"error": f"Agent '{agent_id}' not found", "hint": "Use beacon_discover to list all agents"}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def beacon_send_message(
     relay_token: str,
     from_agent: str,
@@ -1109,7 +1158,7 @@ def beacon_send_message(
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_REMOTE)
 def beacon_chat(agent_id: str, message: str) -> dict:
     """Chat directly with a native Beacon agent.
 
@@ -1130,7 +1179,7 @@ def beacon_chat(agent_id: str, message: str) -> dict:
     return r.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def beacon_contracts(agent_id: str = "") -> dict:
     """List Beacon contracts (bounties, agreements, accords).
 
@@ -1157,7 +1206,7 @@ def beacon_contracts(agent_id: str = "") -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def beacon_network_stats() -> dict:
     """Get Beacon network statistics.
 
@@ -1204,7 +1253,7 @@ BOTTUBE_BOUNTIES_REPO = "Scottcjn/BoTTube"
 PRESERVED_URL = "https://rustchain.org/preserved.html"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def legend_of_elya_info() -> dict:
     """Get information about The Legend of Elya — the N64-style LLM adventure game.
 
@@ -1275,7 +1324,7 @@ def legend_of_elya_info() -> dict:
     return info
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def bounty_search(
     keyword: str = "",
     min_rtc: float = 0,
@@ -1375,7 +1424,7 @@ def _extract_rtc_amount(title: str, body: str = "") -> float:
     return 0.0
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def contributor_lookup(username: str) -> dict:
     """Look up a contributor's RTC balance and merge history across RustChain repos.
 
@@ -1444,7 +1493,7 @@ def contributor_lookup(username: str) -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def network_health() -> dict:
     """Get aggregate health of the live RustChain attestation nodes.
 
@@ -1531,7 +1580,7 @@ def _health_probe_client() -> httpx.Client:
     return _probe_client
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 def green_tracker() -> dict:
     """Get the fleet of preserved machines from the RustChain green tracker.
 

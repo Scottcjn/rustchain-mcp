@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Optional
@@ -570,6 +571,20 @@ def get_keystore_path() -> Path:
     return Path.home() / ".rustchain" / "mcp_wallets"
 
 
+_WALLET_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _wallet_file(keystore_path: Path, wallet_id: str) -> Optional[Path]:
+    """Keystore file for ``wallet_id``, or None if the ID is not a safe filename.
+
+    Wallet IDs reach here from tool arguments and from imported keystore JSON,
+    so they must not be able to name a path outside the keystore directory.
+    """
+    if not isinstance(wallet_id, str) or not _WALLET_ID_RE.fullmatch(wallet_id) or ".." in wallet_id:
+        return None
+    return keystore_path / f"{wallet_id}.json"
+
+
 def ensure_keystore_exists() -> Path:
     """Ensure the keystore directory exists, create if necessary."""
     keystore_path = get_keystore_path()
@@ -579,18 +594,83 @@ def ensure_keystore_exists() -> Path:
     return keystore_path
 
 
+PASSWORD_REQUIRED_MESSAGE = (
+    "A password is required. Keystores are encrypted with this password; "
+    "without one the private key would be recoverable by anyone who can read "
+    "the keystore file."
+)
+
+
+def _require_password(password: str) -> None:
+    """Refuse to create or export key material without a real password.
+
+    Older versions fell back to the wallet_id (stored in plaintext in the same
+    file) or a fixed string, which only looked encrypted.
+    """
+    if not password:
+        raise ValueError(PASSWORD_REQUIRED_MESSAGE)
+
+
+def _write_new_keystore(wallet_file: Path, keystore_data: dict[str, Any]) -> None:
+    """Write a keystore file, refusing to overwrite an existing one.
+
+    The keystore is written and fsynced under a temporary name, then
+    hard-linked into place: the link is atomic and fails if the target exists,
+    so a crash or full disk mid-write never leaves a truncated keystore that
+    blocks the wallet ID. Files are created 0600 with O_EXCL, so key material
+    is never world-readable and a planted symlink is never followed.
+    """
+    tmp_file = wallet_file.with_name(f".{wallet_file.name}.{secrets.token_hex(8)}.tmp")
+    fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(keystore_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp_file, wallet_file)
+        except FileExistsError:
+            raise ValueError(
+                f"Wallet '{wallet_file.stem}' already exists; refusing to overwrite "
+                "its keys. Choose a different name or wallet_id."
+            ) from None
+    finally:
+        tmp_file.unlink(missing_ok=True)
+
+
 def create_wallet(agent_name: str, password: str = "") -> dict[str, Any]:
     """
     Create a new Ed25519 wallet with BIP39 seed phrase.
     
     Args:
         agent_name: Name for the wallet (will be slugified)
-        password: Optional password to encrypt the keystore
+        password: Password to encrypt the keystore (required)
     
     Returns:
         Dictionary with wallet_id, address, and public_key
         (NEVER returns private_key or mnemonic in production)
+
+    Raises:
+        ValueError: if no password is given, the name is empty, or a wallet
+            with the same (slugified) wallet_id already exists.
     """
+    _require_password(password)
+
+    # Create wallet ID from agent name (slugify: lowercase, replace spaces/underscores/special chars with hyphens)
+    import re
+    wallet_id = re.sub(r'[^a-z0-9]+', '-', agent_name.lower()).strip('-')
+    if not wallet_id:
+        raise ValueError("agent_name must contain at least one letter or digit")
+
+    # Fail fast before generating keys; _write_new_keystore re-checks atomically.
+    keystore_path = ensure_keystore_exists()
+    wallet_file = keystore_path / f"{wallet_id}.json"
+    if wallet_file.exists():
+        raise ValueError(
+            f"Wallet '{wallet_id}' already exists; refusing to overwrite its keys. "
+            "Choose a different name."
+        )
+
     # Generate mnemonic
     mnemonic = _generate_mnemonic(strength=128)  # 12 words
     
@@ -601,28 +681,19 @@ def create_wallet(agent_name: str, password: str = "") -> dict[str, Any]:
     # Derive wallet address
     address = _derive_wallet_address(public_key)
     
-    # Create wallet ID from agent name (slugify: lowercase, replace spaces/underscores/special chars with hyphens)
-    import re
-    wallet_id = re.sub(r'[^a-z0-9]+', '-', agent_name.lower()).strip('-')
-    
-    # Store in keystore (encrypted)
-    keystore_path = ensure_keystore_exists()
-    wallet_file = keystore_path / f"{wallet_id}.json"
-    
     keystore_data = {
         "version": 1,
         "wallet_id": wallet_id,
         "address": address,
         "public_key": _bytes_to_hex(public_key),
-        "encrypted_private_key": _encrypt_data(_bytes_to_hex(private_key), password or wallet_id),
-        "encrypted_mnemonic": _encrypt_data(mnemonic, password or wallet_id),
-        "created_at": int(os.path.getmtime(keystore_path)) if wallet_file.exists() else int(__import__('time').time()),
+        "encrypted_private_key": _encrypt_data(_bytes_to_hex(private_key), password),
+        "encrypted_mnemonic": _encrypt_data(mnemonic, password),
+        "password_protected": True,
+        "created_at": int(__import__('time').time()),
     }
     
-    # Write keystore file
-    with open(wallet_file, 'w') as f:
-        json.dump(keystore_data, f, indent=2)
-    os.chmod(wallet_file, 0o600)
+    # Write keystore file (never overwrites an existing wallet)
+    _write_new_keystore(wallet_file, keystore_data)
     
     # Return only public information
     return {
@@ -645,23 +716,31 @@ def load_wallet(wallet_id: str, password: str = "") -> Optional[dict[str, Any]]:
     
     Returns:
         Wallet data including private_key and mnemonic if password is correct,
-        None if wallet not found or password incorrect
+        None if wallet not found or password incorrect.
+
+    Keystores written before passwords were required may be encrypted with the
+    wallet_id itself; with an empty password those still load (so existing
+    funds stay reachable) and the result carries ``legacy_wallet_id_key=True``.
     """
     keystore_path = get_keystore_path()
-    wallet_file = keystore_path / f"{wallet_id}.json"
+    wallet_file = _wallet_file(keystore_path, wallet_id)
     
-    if not wallet_file.exists():
+    if wallet_file is None or not wallet_file.exists():
         return None
     
     try:
         with open(wallet_file, 'r') as f:
             keystore_data = json.load(f)
         
+        legacy_key = not password
+        if legacy_key and keystore_data.get("password_protected"):
+            return None
+        
         # Decrypt private key and mnemonic
         private_key_hex = _decrypt_data(keystore_data["encrypted_private_key"], password or wallet_id)
         mnemonic = _decrypt_data(keystore_data["encrypted_mnemonic"], password or wallet_id)
         
-        return {
+        wallet = {
             "wallet_id": keystore_data["wallet_id"],
             "address": keystore_data["address"],
             "public_key": keystore_data["public_key"],
@@ -669,9 +748,28 @@ def load_wallet(wallet_id: str, password: str = "") -> Optional[dict[str, Any]]:
             "mnemonic": mnemonic,
             "created_at": keystore_data.get("created_at"),
         }
+        if legacy_key:
+            wallet["legacy_wallet_id_key"] = True
+        return wallet
     except Exception:
         # Decryption failed (wrong password or corrupted data)
         return None
+
+
+def get_wallet_address(wallet_id: str) -> Optional[str]:
+    """Return a local wallet's public address without decrypting any keys.
+
+    Returns None if the wallet is not in the keystore or the file is unreadable.
+    """
+    wallet_file = _wallet_file(get_keystore_path(), wallet_id)
+    if wallet_file is None or not wallet_file.is_file():
+        return None
+    try:
+        with open(wallet_file, 'r') as f:
+            address = json.load(f).get("address")
+    except Exception:
+        return None
+    return address if isinstance(address, str) and address else None
 
 
 def list_wallets() -> list[dict[str, Any]]:
@@ -707,11 +805,15 @@ def export_keystore(password: str = "") -> dict[str, Any]:
     Export the entire keystore as encrypted JSON.
     
     Args:
-        password: Password to encrypt the export
+        password: Password to encrypt the export (required)
     
     Returns:
         Encrypted keystore JSON (base64-encoded)
+
+    Raises:
+        ValueError: if no password is given.
     """
+    _require_password(password)
     keystore_path = get_keystore_path()
     wallets = []
     
@@ -731,7 +833,7 @@ def export_keystore(password: str = "") -> dict[str, Any]:
     }
     
     export_json = json.dumps(export_data)
-    encrypted_export = _encrypt_data(export_json, password or "rustchain-mcp-export")
+    encrypted_export = _encrypt_data(export_json, password)
     
     return {
         "encrypted_keystore": encrypted_export,
@@ -752,24 +854,39 @@ def import_wallet(
         source: Either a BIP39 seed phrase (space-separated words) or
                 encrypted keystore JSON string
         wallet_id: Desired wallet ID (optional, auto-generated if not provided)
-        password: Password for encrypted keystore or seed phrase
+        password: Password to encrypt the imported keystore (required)
 
     Returns:
-        Imported wallet info (wallet_id, address)
+        Imported wallet info (wallet_id, address), or {"error": ...}.
+        Existing wallets are never overwritten.
     """
+    if not password:
+        return {"error": PASSWORD_REQUIRED_MESSAGE}
+
     # First try to parse as JSON (encrypted keystore export)
     try:
         imported_data = json.loads(source)
         
         # Handle single wallet or wallet array
         wallets_to_import = imported_data.get("wallets", [imported_data])
+        if wallet_id and len(wallets_to_import) > 1:
+            return {
+                "error": "wallet_id can only be given when importing a single "
+                "wallet; batch imports keep each wallet's own wallet_id."
+            }
         
         imported_count = 0
+        skipped_existing = []
+        skipped_invalid = []
+        failed = []
         for wallet_data in wallets_to_import:
             target_id = wallet_id or wallet_data.get("wallet_id", f"imported-{__import__('time').time()}")
             
             keystore_path = ensure_keystore_exists()
-            wallet_file = keystore_path / f"{target_id}.json"
+            wallet_file = _wallet_file(keystore_path, target_id)
+            if wallet_file is None:
+                skipped_invalid.append(str(target_id))
+                continue
             
             # Re-encrypt with new password
             keystore_data = {
@@ -779,25 +896,46 @@ def import_wallet(
                 "public_key": wallet_data.get("public_key", ""),
                 "encrypted_private_key": _encrypt_data(
                     wallet_data.get("encrypted_private_key", ""),
-                    password or target_id,
+                    password,
                 ),
                 "encrypted_mnemonic": _encrypt_data(
                     wallet_data.get("encrypted_mnemonic", ""),
-                    password or target_id,
+                    password,
                 ),
+                "password_protected": True,
                 "created_at": int(__import__('time').time()),
                 "imported_from": "keystore",
             }
             
-            with open(wallet_file, 'w') as f:
-                json.dump(keystore_data, f, indent=2)
-            os.chmod(wallet_file, 0o600)
+            try:
+                _write_new_keystore(wallet_file, keystore_data)
+            except ValueError:
+                skipped_existing.append(str(target_id))
+                continue
+            except OSError as e:
+                failed.append({"wallet_id": str(target_id), "error": e.strerror or str(e)})
+                continue
             imported_count += 1
         
-        return {
+        result = {
             "wallets_imported": imported_count,
             "message": f"Successfully imported {imported_count} wallet(s)",
         }
+        if skipped_existing:
+            result["skipped_existing"] = skipped_existing
+            result["message"] += (
+                f"; skipped {len(skipped_existing)} that already exist "
+                "(existing wallets are never overwritten)"
+            )
+        if skipped_invalid:
+            result["skipped_invalid_id"] = skipped_invalid
+            result["message"] += (
+                f"; skipped {len(skipped_invalid)} with an invalid wallet_id"
+            )
+        if failed:
+            result["failed"] = failed
+            result["message"] += f"; {len(failed)} failed to write"
+        return result
     except json.JSONDecodeError:
         pass
     
@@ -818,22 +956,26 @@ def import_wallet(
 
         # Store in keystore
         keystore_path = ensure_keystore_exists()
-        wallet_file = keystore_path / f"{wallet_id}.json"
+        wallet_file = _wallet_file(keystore_path, wallet_id)
+        if wallet_file is None:
+            return {"error": f"Invalid wallet_id {wallet_id!r}: use letters, digits, '.', '_' or '-'"}
 
         keystore_data = {
             "version": 1,
             "wallet_id": wallet_id,
             "address": address,
             "public_key": _bytes_to_hex(public_key),
-            "encrypted_private_key": _encrypt_data(_bytes_to_hex(private_key), password or wallet_id),
-            "encrypted_mnemonic": _encrypt_data(mnemonic, password or wallet_id),
+            "encrypted_private_key": _encrypt_data(_bytes_to_hex(private_key), password),
+            "encrypted_mnemonic": _encrypt_data(mnemonic, password),
+            "password_protected": True,
             "created_at": int(__import__('time').time()),
             "imported_from": "seed_phrase",
         }
 
-        with open(wallet_file, 'w') as f:
-            json.dump(keystore_data, f, indent=2)
-        os.chmod(wallet_file, 0o600)
+        try:
+            _write_new_keystore(wallet_file, keystore_data)
+        except ValueError as e:
+            return {"error": str(e)}
 
         return {
             "wallet_id": wallet_id,

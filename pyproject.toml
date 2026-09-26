@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rustchain-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "AI-agent tools for the RustChain ecosystem: the agentic-AI-native blockchain RustChain (Proof of Antiquity / hardware authenticity), the BoTTube agent-video platform, and the Beacon agent-identity protocol. Query chain state, agent identity, and media provenance (AVAP). RTC rewards optional."
 readme = "README.md"
 license = "MIT"

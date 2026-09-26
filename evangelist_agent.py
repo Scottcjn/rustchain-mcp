@@ -26,10 +26,16 @@ from typing import Any
 import httpx
 
 
-# Self-signed cert on dev nodes
-_TLS_VERIFY = os.environ.get("TLS_VERIFY", "0") != "0"
+# TLS verification is on by default: these requests carry API keys and bearer
+# tokens. Set RUSTCHAIN_TLS_VERIFY=0 (same variable as the MCP server; the
+# older TLS_VERIFY still works) only for a trusted self-signed test node.
+_TLS_VERIFY = os.environ.get(
+    "RUSTCHAIN_TLS_VERIFY", os.environ.get("TLS_VERIFY", "1")
+).strip().lower() not in ("0", "false", "no")
 # ── Configuration ──────────────────────────────────────────────
-RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
+# Public hostname: the node's certificate is issued for it, so the bare node IP
+# fails verification.
+RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://rustchain.org")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 MOLTBOOK_URL = os.environ.get("MOLTBOOK_URL", "https://www.moltbook.com")

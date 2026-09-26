@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -40,11 +40,8 @@ jobs:
           pip install -e .
       - name: Run tests
         # CrewAI has a separate optional dependency file and is not part of
-        # the core package installed above. Two legacy evangelist copy checks
-        # are also outside this MCP package suite. All selected failures remain
-        # fatal; there is deliberately no shell fallback around pytest.
+        # the core package installed above. All failures remain fatal; there
+        # is deliberately no shell fallback around pytest.
         run: >-
           pytest tests/ -v --tb=short
           --ignore=tests/test_crewai.py
-          --deselect=tests/unit/test_actions.py::TestGenerateOnboardingPost::test_successful_generation_with_live_stats
-          --deselect=tests/unit/test_actions.py::TestGenerateOnboardingPost::test_fallback_when_apis_fail
