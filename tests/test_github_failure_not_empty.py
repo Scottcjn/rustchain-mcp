@@ -100,3 +100,117 @@ def test_contributor_lookup_zero_balance_still_means_no_wallet():
     assert result["rtc_balance"] is None
     assert "No RTC wallet found" in result["note"]
     assert result["merged_prs"]["complete"] is True
+
+
+# --- Review fixes (codex / grok / astra) -------------------------------------
+
+
+def test_bounty_search_incomplete_results_is_not_complete():
+    def handler(request):
+        return httpx.Response(200, json={
+            "total_count": 31, "incomplete_results": True, "items": [],
+        })
+
+    result = _run(server.bounty_search, handler)
+
+    assert result["complete"] is False
+    assert result["truncated"] == [{
+        "repo": server.BOUNTIES_REPO, "total_count": 31, "returned": 0,
+        "incomplete_results": True,
+    }]
+
+
+def test_bounty_search_more_matches_than_one_page_is_not_complete():
+    items = [
+        {"title": f"B{i} - 5 RTC", "number": i, "labels": [], "html_url": "u"}
+        for i in range(30)
+    ]
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "total_count": 45, "incomplete_results": False, "items": items,
+        })
+
+    result = _run(server.bounty_search, handler)
+
+    assert result["total"] == 30
+    assert result["complete"] is False
+    assert result["truncated"][0]["total_count"] == 45
+
+
+def test_bounty_search_full_page_with_matching_total_is_complete():
+    def handler(request):
+        return httpx.Response(200, json={
+            "total_count": 1, "incomplete_results": False,
+            "items": [{"title": "B - 5 RTC", "number": 1, "labels": [], "html_url": "u"}],
+        })
+
+    result = _run(server.bounty_search, handler)
+
+    assert result["complete"] is True
+    assert "truncated" not in result
+
+
+def test_contributor_lookup_merged_prs_truncated_is_not_complete():
+    def handler(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={
+                "total_count": 25, "incomplete_results": False,
+                "items": [{"title": "p", "html_url": "u", "closed_at": ""}] * 20,
+            })
+        return httpx.Response(200, json={"amount_rtc": 0, "miner_id": "x"})
+
+    result = _run(server.contributor_lookup, handler, "someone")
+
+    assert result["merged_prs"]["complete"] is False
+    assert result["merged_prs"]["truncated"]
+
+
+def test_contributor_lookup_partial_node_failure_is_not_no_wallet():
+    # One candidate 503s while the others return zero: the failed one may
+    # hold the balance, so "No RTC wallet found" would be a false negative.
+    def handler(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={"items": []})
+        if request.url.params["miner_id"] == "Alice":
+            return httpx.Response(503, json={"error": "maintenance"})
+        return httpx.Response(200, json={"amount_rtc": 0, "miner_id": "x"})
+
+    result = _run(server.contributor_lookup, handler, "Alice")
+
+    assert result["rtc_balance"] is None
+    assert "No RTC wallet found" not in result["note"]
+    assert "lookup failed for: Alice" in result["note"]
+    assert result["balance_complete"] is False
+    assert result["balance_errors"] == [{"wallet_id": "Alice", "error": "NODE_UNAVAILABLE"}]
+
+
+def test_contributor_lookup_invalid_wallet_id_is_not_a_node_outage():
+    # The node answers 400 "invalid miner_id" for IDs outside
+    # ^[A-Za-z0-9._:-]{1,80}$ such as GitHub bot logins.
+    def handler(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(400, json={"ok": False, "error": "invalid miner_id"})
+
+    result = _run(server.contributor_lookup, handler, "dependabot[bot]")
+
+    assert result["rtc_balance"] is None
+    assert "lookup failed" not in result["note"]
+    assert "not a valid RustChain wallet ID" in result["note"]
+    assert "balance_errors" not in result
+    assert result["balance_complete"] is True
+    assert "dependabot[bot]" in result["invalid_wallet_ids"]
+
+
+def test_balance_400_is_invalid_identifier_not_node_unavailable():
+    def handler(request):
+        return httpx.Response(400, json={"ok": False, "error": "invalid miner_id"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with mock.patch.object(server, "RUSTCHAIN_NODE", "https://node.test"):
+        result = server._get_rustchain_balance("bad id!", client)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "INVALID_IDENTIFIER"
+    assert result["error"]["retryable"] is False

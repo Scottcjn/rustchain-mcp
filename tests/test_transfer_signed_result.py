@@ -127,3 +127,101 @@ def test_connect_error_is_known_not_submitted(sender):
     assert result["success"] is False
     assert result["code"] == "NODE_UNREACHABLE"
     assert result["outcome_unknown"] is False
+
+
+# --- Review fixes (codex / grok / astra) -------------------------------------
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_5xx_is_outcome_unknown_not_a_retryable_rejection(sender, status):
+    # The node commits the pending row before writing its response and sits
+    # behind nginx/gunicorn, so a 5xx can arrive after the transfer was queued.
+    def handler(request):
+        return httpx.Response(status, text="Bad Gateway")
+
+    result = _transfer(handler)
+
+    assert result["success"] is False
+    assert result["code"] == "TRANSFER_OUTCOME_UNKNOWN"
+    assert result["outcome_unknown"] is True
+    assert result["retryable"] is False
+    assert result["status_code"] == status
+    assert "wallet_history" in result["error"]
+
+
+def test_4xx_rejection_is_definite_and_not_retryable(sender):
+    def handler(request):
+        return httpx.Response(400, json={"error": "Insufficient available balance"})
+
+    result = _transfer(handler)
+
+    assert result["outcome_unknown"] is False
+    assert result["retryable"] is False
+
+
+def test_2xx_without_boolean_ok_is_invalid_response_outcome_unknown(sender):
+    # e.g. a node schema change that drops "ok" but still queues the transfer.
+    def handler(request):
+        return httpx.Response(200, json={"phase": "pending", "tx_hash": "abc"})
+
+    result = _transfer(handler)
+
+    assert result["success"] is False
+    assert result["code"] == "INVALID_NODE_RESPONSE"
+    assert result["outcome_unknown"] is True
+    assert result["retryable"] is False
+    assert result["node_response"] == {"phase": "pending", "tx_hash": "abc"}
+
+
+def test_2xx_ok_string_is_not_treated_as_boolean(sender):
+    def handler(request):
+        return httpx.Response(200, json={"ok": "true", "tx_hash": "abc"})
+
+    result = _transfer(handler)
+
+    assert result["success"] is False
+    assert result["code"] == "INVALID_NODE_RESPONSE"
+    assert result["outcome_unknown"] is True
+
+
+def test_2xx_explicit_ok_false_is_definite_rejection(sender):
+    def handler(request):
+        return httpx.Response(200, json={"ok": False, "error": "nonce replay"})
+
+    result = _transfer(handler)
+
+    assert result["code"] == "TRANSFER_REJECTED"
+    assert result["outcome_unknown"] is False
+
+
+@pytest.mark.parametrize("exc_type", [httpx.ConnectTimeout, httpx.PoolTimeout])
+def test_connect_and_pool_timeouts_mean_nothing_was_sent(sender, exc_type):
+    # Neither is a ConnectError subclass, but no request bytes were sent.
+    def handler(request):
+        raise exc_type("timed out", request=request)
+
+    result = _transfer(handler)
+
+    assert result["success"] is False
+    assert result["code"] == "NODE_UNREACHABLE"
+    assert result["outcome_unknown"] is False
+
+
+def test_wrong_password_result_has_success_key(sender):
+    # The README example branches on result["success"]; a local failure used
+    # to return {error, hint} only, so that raised KeyError.
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: pytest.fail("nothing may be sent for a wrong password")
+    ))
+    with mock.patch.object(server, "get_client", return_value=client):
+        result = _raw(server.wallet_transfer_signed)(
+            from_wallet_id="result-sender",
+            to_address=TO,
+            amount_rtc=2.0,
+            password="wrong-password",
+        )
+
+    assert result["success"] is False
+    assert result["ok"] is False
+    assert result["outcome_unknown"] is False
+    assert "not found or incorrect password" in result["error"]

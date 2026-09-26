@@ -189,6 +189,7 @@ class TestLegacyKeystores:
         mock_response = mock.Mock()
         # Shape of the node's real acceptance response (phase=pending + tx_hash).
         mock_response.json.return_value = {"ok": True, "phase": "pending", "tx_hash": "tx1"}
+        mock_response.status_code = 200
         mock_response.raise_for_status = mock.Mock()
 
         with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
@@ -973,6 +974,7 @@ class TestMCPServerWalletTools:
             "pending_id": 7,
             "tx_hash": "tx_abc123",
         }
+        mock_response.status_code = 200
         mock_response.raise_for_status = mock.Mock()
 
         with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:

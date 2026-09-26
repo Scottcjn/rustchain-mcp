@@ -69,6 +69,7 @@ def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
 
     resp = mock.Mock()
     resp.json.return_value = {"ok": True, "phase": "pending", "tx_hash": "tx_test"}
+    resp.status_code = 200
     resp.raise_for_status = mock.Mock()
 
     def fake_post(url, json=None, **kwargs):

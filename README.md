@@ -286,8 +286,13 @@ result = wallet_transfer_signed(
 if result["success"]:
     # Signed transfers are queued as pending and confirm after a delay.
     print(f"Pending transfer {result['tx_hash']}, confirms at {result['confirms_at']}")
+elif result.get("outcome_unknown"):
+    # Timeout, HTTP 5xx or malformed reply: the transfer MAY have been queued.
+    # Check wallet_history before retrying; a retry signs a new nonce.
+    print(f"Outcome unknown: {result['error']}")
 else:
-    print(f"Rejected: {result['error']}")  # the node's reason
+    # Not sent or refused (wrong password, node unreachable, node rejection).
+    print(f"Not transferred ({result.get('code')}): {result['error']}")
 
 # Export encrypted backup (password required)
 backup = wallet_export(password="backup-password")

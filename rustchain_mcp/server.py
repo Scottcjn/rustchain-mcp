@@ -214,6 +214,25 @@ def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) ->
             },
         }
     except httpx.HTTPStatusError:
+        if response.status_code == 400:
+            # The node answers 400 "invalid miner_id" for IDs outside its
+            # allowed charset/length (e.g. a GitHub bot login such as
+            # "dependabot[bot]"). That is a definitive answer about the ID,
+            # not an outage, and retrying cannot succeed.
+            return {
+                "ok": False,
+                "error": {
+                    "code": "INVALID_IDENTIFIER",
+                    "message": _handle_api_error(response),
+                    "retryable": False,
+                    "source": "rustchain",
+                    "details": {
+                        "endpoint": "/wallet/balance",
+                        "miner_id": miner_id,
+                        "status_code": 400,
+                    },
+                },
+            }
         return {
             "ok": False,
             "error": {
@@ -527,11 +546,17 @@ def wallet_transfer_signed(
     # Load wallet from keystore
     wallet = rustchain_crypto.load_wallet(from_wallet_id, password)
     if wallet is None:
+        # Nothing was signed or sent. success/ok are set so callers can branch
+        # on result["success"] for every outcome.
         return {
+            "success": False,
+            "ok": False,
+            "code": "WALLET_UNAVAILABLE",
             "error": f"Wallet '{from_wallet_id}' not found or incorrect password",
             "hint": "Use wallet_list to see available wallets",
+            "outcome_unknown": False,
         }
-    
+
     # Sign EXACTLY the message the node reconstructs and verifies at
     # POST /wallet/transfer/signed (createkr/Rustchain node handler):
     #
@@ -794,11 +819,14 @@ def rustchain_transfer_signed(
         public_key: Ed25519 hex public key of the sender
         memo: Optional memo/note for the transaction
 
-    Returns the node's response (ok, tx_hash, pending_id, phase, confirms_at).
-    On rejection returns {"ok": false, "code": "TRANSFER_REJECTED", "error":
-    <node reason>, "status_code": ...}; on a transport failure returns
-    ok=false with outcome_unknown telling whether the transfer may have
-    been accepted. Transfers require valid Ed25519 signatures.
+    Returns the node's response (ok, tx_hash, pending_id, phase, confirms_at)
+    only when the node reports ok=true. A 4xx or an explicit ok=false returns
+    {"ok": false, "code": "TRANSFER_REJECTED", "error": <node reason>,
+    "outcome_unknown": false}. A 5xx, a timeout after connecting, or a 2xx
+    body without a boolean "ok" returns ok=false with outcome_unknown=true
+    (codes TRANSFER_OUTCOME_UNKNOWN / INVALID_NODE_RESPONSE): check
+    wallet_history before retrying. NODE_UNREACHABLE means nothing was sent.
+    Transfers require valid Ed25519 signatures.
     """
     import time
     if nonce is None:
@@ -823,8 +851,10 @@ def rustchain_transfer_signed(
     endpoint = "/wallet/transfer/signed"
     try:
         r = get_client().post(f"{RUSTCHAIN_NODE}{endpoint}", json=payload)
-    except httpx.ConnectError:
-        # The connection was never established, so nothing was submitted.
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+        # The connection was never established (or no pooled connection was
+        # ever acquired), so no request bytes were sent: nothing was submitted.
+        # ConnectTimeout and PoolTimeout are not ConnectError subclasses.
         return {
             "ok": False,
             "code": "NODE_UNREACHABLE",
@@ -848,17 +878,39 @@ def rustchain_transfer_signed(
             "outcome_unknown": True,
             "endpoint": endpoint,
         }
+    if r.status_code >= 500:
+        # A 5xx is NOT a definite rejection. The node commits the pending
+        # transfer before it writes its response, and it sits behind nginx and
+        # gunicorn: a 502/504 (or a crash after commit) can arrive after the
+        # transfer was queued. Retrying signs a NEW nonce and could queue a
+        # second debit, so this is reported like a read timeout.
+        return {
+            "ok": False,
+            "code": "TRANSFER_OUTCOME_UNKNOWN",
+            "error": (
+                f"RustChain node returned HTTP {r.status_code} while submitting the "
+                "transfer; it may or may not have been accepted. Check "
+                "wallet_history before retrying."
+            ),
+            "node_error": _handle_api_error(r),
+            "status_code": r.status_code,
+            "retryable": False,
+            "outcome_unknown": True,
+            "endpoint": endpoint,
+        }
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError:
-        # Keep the node's rejection reason (bad signature, insufficient balance,
-        # replayed nonce, ...) instead of a bare "400 Bad Request" exception.
+        # 4xx: the node's handler rejected the transfer before queuing it. Keep
+        # the node's reason (bad signature, insufficient balance, replayed
+        # nonce, ...) instead of a bare "400 Bad Request" exception.
         return {
             "ok": False,
             "code": "TRANSFER_REJECTED",
             "error": _handle_api_error(r),
             "status_code": r.status_code,
-            "retryable": r.status_code >= 500,
+            # Only a rate limit invites a retry; the transfer was not queued.
+            "retryable": r.status_code == 429,
             "outcome_unknown": False,
             "endpoint": endpoint,
         }
@@ -875,7 +927,38 @@ def rustchain_transfer_signed(
             "outcome_unknown": True,
             "endpoint": endpoint,
         }
-    return data
+    ok = data.get("ok")
+    if ok is True:
+        return data
+    if ok is False:
+        # An explicit ok=false body is the node's own refusal.
+        rejected = dict(data)
+        rejected.setdefault("code", "TRANSFER_REJECTED")
+        rejected.setdefault("error", "RustChain node rejected the transfer (ok=false)")
+        rejected.update({
+            "status_code": r.status_code,
+            "retryable": False,
+            "outcome_unknown": False,
+            "endpoint": endpoint,
+        })
+        return rejected
+    # 2xx without a boolean ok: the node may well have queued the transfer
+    # (e.g. a schema change that drops "ok" but keeps phase/tx_hash), so this
+    # is neither a success nor a safe-to-retry rejection.
+    return {
+        "ok": False,
+        "code": "INVALID_NODE_RESPONSE",
+        "error": (
+            "RustChain node returned a 2xx transfer response without a boolean "
+            "'ok' field; the transfer may or may not have been accepted. Check "
+            "wallet_history before retrying."
+        ),
+        "node_response": data,
+        "status_code": r.status_code,
+        "retryable": False,
+        "outcome_unknown": True,
+        "endpoint": endpoint,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1488,6 +1571,7 @@ def bounty_search(
 
     all_bounties = []
     search_errors = []
+    truncated = []
     client = get_client()
 
     for repo_name in repos:
@@ -1507,12 +1591,16 @@ def bounty_search(
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
             r.raise_for_status()
-            items = r.json().get("items", [])
+            payload = r.json()
+            items = payload.get("items", [])
         except Exception as exc:
             # Do not turn a failed search (most often GitHub's unauthenticated
             # search rate limit, HTTP 403) into "no open bounties".
             search_errors.append({"repo": repo_name, "error": _github_error(exc)})
             continue
+        gap = _github_search_gap(payload, items)
+        if gap:
+            truncated.append({"repo": repo_name, **gap})
 
         for item in items:
             # Extract RTC amount from title or labels
@@ -1543,8 +1631,13 @@ def bounty_search(
         "bounties": all_bounties[:25],
         "note": f"Showing first 25 of {len(all_bounties)}" if len(all_bounties) > 25 else None,
         "tip": "Claim a bounty by commenting on the GitHub issue, then submit a PR.",
-        "complete": not search_errors,
+        # complete=True only when every repo was searched AND GitHub returned
+        # every match in the single page fetched; otherwise total is a lower
+        # bound.
+        "complete": not search_errors and not truncated,
     }
+    if truncated:
+        result["truncated"] = truncated
     if search_errors:
         result["errors"] = search_errors
         if len(search_errors) == len(repos):
@@ -1554,6 +1647,28 @@ def bounty_search(
                 "list means 'unknown', not 'no bounties'."
             )
     return result
+
+
+def _github_search_gap(payload, items: list) -> dict | None:
+    """Describe why a single-page GitHub search result is not the full set.
+
+    Returns None when the page holds every match. Otherwise returns
+    {"total_count": ..., "returned": ..., "incomplete_results": ...}: GitHub
+    flags incomplete_results when its search timed out, and total_count
+    exceeds the page when there are more matches than per_page.
+    """
+    if not isinstance(payload, dict):
+        return None
+    total_count = payload.get("total_count")
+    incomplete = payload.get("incomplete_results") is True
+    more = isinstance(total_count, int) and total_count > len(items)
+    if not (incomplete or more):
+        return None
+    return {
+        "total_count": total_count,
+        "returned": len(items),
+        "incomplete_results": incomplete,
+    }
 
 
 def _github_error(exc: Exception) -> str:
@@ -1599,6 +1714,7 @@ def contributor_lookup(username: str) -> dict:
     # Search for merged PRs across RustChain repos
     merged_prs = []
     pr_errors = []
+    pr_truncated = []
     for repo_name in [BOUNTIES_REPO, BOTTUBE_BOUNTIES_REPO]:
         try:
             query = f"repo:{repo_name} is:pr is:merged author:{username}"
@@ -1608,7 +1724,11 @@ def contributor_lookup(username: str) -> dict:
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
             r.raise_for_status()
-            items = r.json().get("items", [])
+            payload = r.json()
+            items = payload.get("items", [])
+            gap = _github_search_gap(payload, items)
+            if gap:
+                pr_truncated.append({"repo": repo_name, **gap})
             for item in items:
                 merged_prs.append({
                     "title": item.get("title", ""),
@@ -1623,15 +1743,20 @@ def contributor_lookup(username: str) -> dict:
         "total": len(merged_prs),
         "recent": merged_prs[:10],
         "note": f"Showing 10 of {len(merged_prs)}" if len(merged_prs) > 10 else None,
-        # complete=False: total is a lower bound, not a count of zero merges.
-        "complete": not pr_errors,
+        # complete=False: total is a lower bound (a repo search failed, GitHub
+        # flagged incomplete_results, or there were more matches than the one
+        # page fetched), not an exact count.
+        "complete": not pr_errors and not pr_truncated,
     }
     if pr_errors:
         result["merged_prs"]["errors"] = pr_errors
+    if pr_truncated:
+        result["merged_prs"]["truncated"] = pr_truncated
 
     # Try to look up RTC balance by common wallet naming conventions.
     wallet_ids_to_try = list(dict.fromkeys([username, f"rtc-{username}", username.lower()]))
     balance_errors = []
+    invalid_ids = []
     for wallet_id in wallet_ids_to_try:
         try:
             balance_data = _get_rustchain_balance(wallet_id, client)
@@ -1640,10 +1765,13 @@ def contributor_lookup(username: str) -> dict:
             continue
         if balance_data.get("ok") is False:
             err = balance_data.get("error") or {}
-            balance_errors.append({
-                "wallet_id": wallet_id,
-                "error": err.get("code", "ERROR") if isinstance(err, dict) else str(err),
-            })
+            code = err.get("code", "ERROR") if isinstance(err, dict) else str(err)
+            if code == "INVALID_IDENTIFIER":
+                # Definitive: the node cannot hold a wallet under this ID
+                # (e.g. "dependabot[bot]"). Not a lookup failure.
+                invalid_ids.append(wallet_id)
+                continue
+            balance_errors.append({"wallet_id": wallet_id, "error": code})
             continue
         amount = balance_data.get("amount_rtc", 0)
         if isinstance(amount, (int, float)) and amount > 0:
@@ -1653,21 +1781,38 @@ def contributor_lookup(username: str) -> dict:
 
     if "rtc_balance" not in result:
         result["rtc_balance"] = None
-        if balance_errors and len(balance_errors) == len(wallet_ids_to_try):
-            # Every lookup failed: the node could not answer, which is not
-            # the same as "this contributor has no wallet".
+        if invalid_ids:
+            result["invalid_wallet_ids"] = invalid_ids
+        if balance_errors:
             result["balance_errors"] = balance_errors
+        checked = len(wallet_ids_to_try) - len(balance_errors) - len(invalid_ids)
+        if balance_errors and checked == 0:
+            # No candidate could be checked: the node could not answer, which
+            # is not the same as "this contributor has no wallet".
             result["note"] = (
                 f"Could not check RTC balances for '{username}': the RustChain "
                 "node lookup failed. Retry later; this is not a 'no wallet' result."
             )
+        elif balance_errors:
+            # Some candidates came back empty but others failed; a failed one
+            # may hold the balance, so this is not a definitive answer either.
+            failed = ", ".join(e["wallet_id"] for e in balance_errors)
+            result["note"] = (
+                f"No RTC balance found under the wallet IDs that could be checked "
+                f"for '{username}', but the lookup failed for: {failed}. Retry "
+                "later; this is not a definitive 'no wallet' result."
+            )
+        elif checked == 0:
+            result["note"] = (
+                f"'{username}' is not a valid RustChain wallet ID, so no wallet can "
+                "exist under it. The contributor may use a different wallet ID."
+            )
         else:
-            if balance_errors:
-                result["balance_errors"] = balance_errors
             result["note"] = (
                 f"No RTC wallet found for '{username}'. The contributor may use a "
                 "different wallet ID. Check the bounty ledger or ask them directly."
             )
+        result["balance_complete"] = not balance_errors
 
     return result
 
