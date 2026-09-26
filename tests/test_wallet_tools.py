@@ -187,7 +187,9 @@ class TestLegacyKeystores:
 
         _write_legacy_keystore(temp_keystore, "old-sender")
         mock_response = mock.Mock()
-        mock_response.json.return_value = {"transaction_id": "tx1", "new_balance": 1.0}
+        # Shape of the node's real acceptance response (phase=pending + tx_hash).
+        mock_response.json.return_value = {"ok": True, "phase": "pending", "tx_hash": "tx1"}
+        mock_response.status_code = 200
         mock_response.raise_for_status = mock.Mock()
 
         with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
@@ -965,11 +967,14 @@ class TestMCPServerWalletTools:
         wallet_create(agent_name="sender-wallet", password="test-pass")
 
         mock_response = mock.Mock()
+        # Shape of the node's real acceptance response (phase=pending + tx_hash).
         mock_response.json.return_value = {
-            "transaction_id": "tx_abc123",
-            "new_balance": 90.0,
-            "status": "submitted",
+            "ok": True,
+            "phase": "pending",
+            "pending_id": 7,
+            "tx_hash": "tx_abc123",
         }
+        mock_response.status_code = 200
         mock_response.raise_for_status = mock.Mock()
 
         with mock.patch("rustchain_mcp.server.get_client") as mock_client_fn:
@@ -986,8 +991,9 @@ class TestMCPServerWalletTools:
             )
 
         assert isinstance(result, dict)
-        # Should succeed (not have an error key at top level)
-        assert "error" not in result or result.get("success") is True
+        assert result["success"] is True
+        assert "error" not in result
+        assert result["transaction_id"] == "tx_abc123"
 
 
 # ═══════════════════════════════════════════════════════════════
