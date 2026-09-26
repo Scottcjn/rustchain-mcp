@@ -495,7 +495,12 @@ def wallet_transfer_signed(
                   wallets created before passwords were required)
         memo: Optional memo for the transaction
 
-    Returns transfer result with transaction ID and new balance.
+    On acceptance returns success=True with tx_hash (also as transaction_id),
+    pending_id, phase ("pending") and confirms_at: the node queues signed
+    transfers and confirms them after a delay. If the node rejects the
+    transfer or cannot be reached, returns success=False with the node's
+    reason in "error"; outcome_unknown=True means check wallet_history
+    before retrying.
     """
     # Load wallet from keystore
     wallet = rustchain_crypto.load_wallet(from_wallet_id, password)
@@ -539,15 +544,41 @@ def wallet_transfer_signed(
         nonce=nonce,
     )
     
+    # Success is only what the node affirmatively reports (ok: true). A
+    # rejection, transport failure, or unexpected body is returned as a
+    # failure with the node's reason, never as success=True with null fields.
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        failure = dict(result) if isinstance(result, dict) else {}
+        failure.setdefault("error", "RustChain node did not confirm the transfer (ok != true)")
+        failure.update({
+            "success": False,
+            "ok": False,
+            "from_address": wallet["address"],
+            "to_address": to_address,
+            "amount_rtc": amount_rtc,
+        })
+        return failure
+
+    # The node queues signed transfers in a pending ledger (phase="pending")
+    # and confirms them after a delay; tx_hash/pending_id identify it.
+    tx_hash = result.get("tx_hash") or result.get("transaction_id")
     response = {
         "success": True,
-        "transaction_id": result.get("transaction_id"),
+        "ok": True,
+        "transaction_id": tx_hash,
+        "tx_hash": tx_hash,
+        "pending_id": result.get("pending_id"),
+        "phase": result.get("phase"),
+        "confirms_at": result.get("confirms_at"),
         "from_address": wallet["address"],
         "to_address": to_address,
         "amount_rtc": amount_rtc,
         "memo": memo,
-        "new_balance": result.get("new_balance"),
     }
+    if "new_balance" in result:
+        response["new_balance"] = result["new_balance"]
+    if result.get("message"):
+        response["node_message"] = result["message"]
     if wallet.get("legacy_wallet_id_key"):
         response["warning"] = (
             f"Wallet '{from_wallet_id}' was created without a password: its keystore is "
@@ -737,8 +768,11 @@ def rustchain_transfer_signed(
         public_key: Ed25519 hex public key of the sender
         memo: Optional memo/note for the transaction
 
-    Returns transfer result with transaction ID and new balance.
-    Transfers require valid Ed25519 signatures for security.
+    Returns the node's response (ok, tx_hash, pending_id, phase, confirms_at).
+    On rejection returns {"ok": false, "code": "TRANSFER_REJECTED", "error":
+    <node reason>, "status_code": ...}; on a transport failure returns
+    ok=false with outcome_unknown telling whether the transfer may have
+    been accepted. Transfers require valid Ed25519 signatures.
     """
     import time
     if nonce is None:
@@ -760,9 +794,62 @@ def rustchain_transfer_signed(
         "signature": signature,
         "public_key": public_key,
     }
-    r = get_client().post(f"{RUSTCHAIN_NODE}/wallet/transfer/signed", json=payload)
-    r.raise_for_status()
-    return r.json()
+    endpoint = "/wallet/transfer/signed"
+    try:
+        r = get_client().post(f"{RUSTCHAIN_NODE}{endpoint}", json=payload)
+    except httpx.ConnectError:
+        # The connection was never established, so nothing was submitted.
+        return {
+            "ok": False,
+            "code": "NODE_UNREACHABLE",
+            "error": "RustChain node could not be reached; the transfer was not submitted",
+            "retryable": True,
+            "outcome_unknown": False,
+            "endpoint": endpoint,
+        }
+    except httpx.TransportError as exc:
+        # The request may have reached the node before the failure (e.g. a read
+        # timeout), so the transfer may or may not be pending. Retrying signs a
+        # NEW nonce and could move the funds twice.
+        return {
+            "ok": False,
+            "code": "TRANSFER_OUTCOME_UNKNOWN",
+            "error": (
+                f"{type(exc).__name__} while submitting the transfer; it may or may "
+                "not have been accepted. Check wallet_history before retrying."
+            ),
+            "retryable": False,
+            "outcome_unknown": True,
+            "endpoint": endpoint,
+        }
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        # Keep the node's rejection reason (bad signature, insufficient balance,
+        # replayed nonce, ...) instead of a bare "400 Bad Request" exception.
+        return {
+            "ok": False,
+            "code": "TRANSFER_REJECTED",
+            "error": _handle_api_error(r),
+            "status_code": r.status_code,
+            "retryable": r.status_code >= 500,
+            "outcome_unknown": False,
+            "endpoint": endpoint,
+        }
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return {
+            "ok": False,
+            "code": "INVALID_NODE_RESPONSE",
+            "error": "RustChain node returned a non-JSON response to a transfer",
+            "retryable": False,
+            "outcome_unknown": True,
+            "endpoint": endpoint,
+        }
+    return data
 
 
 # ═══════════════════════════════════════════════════════════════

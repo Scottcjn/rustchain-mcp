@@ -283,7 +283,11 @@ result = wallet_transfer_signed(
     password="a-strong-password",
     memo="Payment for services"
 )
-print(f"Transaction ID: {result['transaction_id']}")
+if result["success"]:
+    # Signed transfers are queued as pending and confirm after a delay.
+    print(f"Pending transfer {result['tx_hash']}, confirms at {result['confirms_at']}")
+else:
+    print(f"Rejected: {result['error']}")  # the node's reason
 
 # Export encrypted backup (password required)
 backup = wallet_export(password="backup-password")
