@@ -1487,6 +1487,7 @@ def bounty_search(
         repos.append(BOUNTIES_REPO)
 
     all_bounties = []
+    search_errors = []
     client = get_client()
 
     for repo_name in repos:
@@ -1507,8 +1508,11 @@ def bounty_search(
             )
             r.raise_for_status()
             items = r.json().get("items", [])
-        except Exception:
-            items = []
+        except Exception as exc:
+            # Do not turn a failed search (most often GitHub's unauthenticated
+            # search rate limit, HTTP 403) into "no open bounties".
+            search_errors.append({"repo": repo_name, "error": _github_error(exc)})
+            continue
 
         for item in items:
             # Extract RTC amount from title or labels
@@ -1534,12 +1538,32 @@ def bounty_search(
 
             all_bounties.append(bounty)
 
-    return {
+    result = {
         "total": len(all_bounties),
         "bounties": all_bounties[:25],
         "note": f"Showing first 25 of {len(all_bounties)}" if len(all_bounties) > 25 else None,
         "tip": "Claim a bounty by commenting on the GitHub issue, then submit a PR.",
+        "complete": not search_errors,
     }
+    if search_errors:
+        result["errors"] = search_errors
+        if len(search_errors) == len(repos):
+            result["ok"] = False
+            result["error"] = (
+                "GitHub bounty search failed for every repository; the empty "
+                "list means 'unknown', not 'no bounties'."
+            )
+    return result
+
+
+def _github_error(exc: Exception) -> str:
+    """Short, credential-free description of a failed GitHub API call."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (403, 429):
+            return f"HTTP {code} (GitHub API rate limit likely; retry later)"
+        return f"HTTP {code}"
+    return type(exc).__name__
 
 
 def _extract_rtc_amount(title: str, body: str = "") -> float:
@@ -1574,6 +1598,7 @@ def contributor_lookup(username: str) -> dict:
 
     # Search for merged PRs across RustChain repos
     merged_prs = []
+    pr_errors = []
     for repo_name in [BOUNTIES_REPO, BOTTUBE_BOUNTIES_REPO]:
         try:
             query = f"repo:{repo_name} is:pr is:merged author:{username}"
@@ -1582,42 +1607,67 @@ def contributor_lookup(username: str) -> dict:
                 params={"q": query, "per_page": 20, "sort": "updated", "order": "desc"},
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
-            if r.status_code == 200:
-                items = r.json().get("items", [])
-                for item in items:
-                    merged_prs.append({
-                        "title": item.get("title", ""),
-                        "url": item.get("html_url", ""),
-                        "repo": repo_name,
-                        "merged_at": item.get("closed_at", ""),
-                    })
-        except Exception:
-            pass
+            r.raise_for_status()
+            items = r.json().get("items", [])
+            for item in items:
+                merged_prs.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("html_url", ""),
+                    "repo": repo_name,
+                    "merged_at": item.get("closed_at", ""),
+                })
+        except Exception as exc:
+            pr_errors.append({"repo": repo_name, "error": _github_error(exc)})
 
     result["merged_prs"] = {
         "total": len(merged_prs),
         "recent": merged_prs[:10],
         "note": f"Showing 10 of {len(merged_prs)}" if len(merged_prs) > 10 else None,
+        # complete=False: total is a lower bound, not a count of zero merges.
+        "complete": not pr_errors,
     }
+    if pr_errors:
+        result["merged_prs"]["errors"] = pr_errors
 
     # Try to look up RTC balance by common wallet naming conventions.
-    wallet_ids_to_try = [username, f"rtc-{username}", username.lower()]
+    wallet_ids_to_try = list(dict.fromkeys([username, f"rtc-{username}", username.lower()]))
+    balance_errors = []
     for wallet_id in wallet_ids_to_try:
         try:
             balance_data = _get_rustchain_balance(wallet_id, client)
-            if balance_data.get("amount_rtc", 0) > 0:
-                result["rtc_balance"] = balance_data
-                result["wallet_id"] = wallet_id
-                break
-        except Exception:
-            pass
+        except Exception as exc:
+            balance_errors.append({"wallet_id": wallet_id, "error": type(exc).__name__})
+            continue
+        if balance_data.get("ok") is False:
+            err = balance_data.get("error") or {}
+            balance_errors.append({
+                "wallet_id": wallet_id,
+                "error": err.get("code", "ERROR") if isinstance(err, dict) else str(err),
+            })
+            continue
+        amount = balance_data.get("amount_rtc", 0)
+        if isinstance(amount, (int, float)) and amount > 0:
+            result["rtc_balance"] = balance_data
+            result["wallet_id"] = wallet_id
+            break
 
     if "rtc_balance" not in result:
         result["rtc_balance"] = None
-        result["note"] = (
-            f"No RTC wallet found for '{username}'. The contributor may use a "
-            "different wallet ID. Check the bounty ledger or ask them directly."
-        )
+        if balance_errors and len(balance_errors) == len(wallet_ids_to_try):
+            # Every lookup failed: the node could not answer, which is not
+            # the same as "this contributor has no wallet".
+            result["balance_errors"] = balance_errors
+            result["note"] = (
+                f"Could not check RTC balances for '{username}': the RustChain "
+                "node lookup failed. Retry later; this is not a 'no wallet' result."
+            )
+        else:
+            if balance_errors:
+                result["balance_errors"] = balance_errors
+            result["note"] = (
+                f"No RTC wallet found for '{username}'. The contributor may use a "
+                "different wallet ID. Check the bounty ledger or ask them directly."
+            )
 
     return result
 
