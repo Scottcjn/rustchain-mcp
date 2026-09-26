@@ -17,8 +17,11 @@ import os
 import requests
 
 # TLS verification is on by default: these requests carry API keys and bearer
-# tokens. Set TLS_VERIFY=0 only for a trusted self-signed test node.
-_TLS_VERIFY = os.environ.get("TLS_VERIFY", "1").strip().lower() not in ("0", "false", "no")
+# tokens. Set RUSTCHAIN_TLS_VERIFY=0 (same variable as the MCP server; the
+# older TLS_VERIFY still works) only for a trusted self-signed test node.
+_TLS_VERIFY = os.environ.get(
+    "RUSTCHAIN_TLS_VERIFY", os.environ.get("TLS_VERIFY", "1")
+).strip().lower() not in ("0", "false", "no")
 
 try:
     from langchain_core.tools import tool

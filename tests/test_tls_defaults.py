@@ -57,6 +57,7 @@ def _restore_modules():
 @pytest.mark.parametrize("module_name", MODULES)
 def test_tls_verification_on_by_default(module_name, monkeypatch, optional_deps):
     monkeypatch.delenv("TLS_VERIFY", raising=False)
+    monkeypatch.delenv("RUSTCHAIN_TLS_VERIFY", raising=False)
     monkeypatch.delenv("RUSTCHAIN_NODE", raising=False)
 
     module = _fresh_import(module_name)
@@ -69,13 +70,27 @@ def test_tls_verification_on_by_default(module_name, monkeypatch, optional_deps)
 @pytest.mark.parametrize("module_name", MODULES)
 @pytest.mark.parametrize("value", ["0", "false", "No"])
 def test_tls_verification_can_be_disabled_explicitly(module_name, value, monkeypatch, optional_deps):
+    monkeypatch.delenv("RUSTCHAIN_TLS_VERIFY", raising=False)
     monkeypatch.setenv("TLS_VERIFY", value)
 
     assert _fresh_import(module_name)._TLS_VERIFY is False
 
 
+@pytest.mark.parametrize("module_name", MODULES)
+def test_clients_use_the_servers_tls_variable(module_name, monkeypatch, optional_deps):
+    """RUSTCHAIN_TLS_VERIFY (the MCP server's variable) wins over legacy TLS_VERIFY."""
+    monkeypatch.setenv("RUSTCHAIN_TLS_VERIFY", "false")
+    monkeypatch.setenv("TLS_VERIFY", "1")
+    assert _fresh_import(module_name)._TLS_VERIFY is False
+
+    monkeypatch.setenv("RUSTCHAIN_TLS_VERIFY", "true")
+    monkeypatch.setenv("TLS_VERIFY", "0")
+    assert _fresh_import(module_name)._TLS_VERIFY is True
+
+
 def test_evangelist_http_client_verifies(monkeypatch, optional_deps):
     monkeypatch.delenv("TLS_VERIFY", raising=False)
+    monkeypatch.delenv("RUSTCHAIN_TLS_VERIFY", raising=False)
     import httpx
 
     captured = {}

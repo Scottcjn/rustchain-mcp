@@ -390,6 +390,60 @@ class TestWalletImport:
         assert not any(temp_keystore.parent.rglob("*escape*"))
         assert not any(temp_keystore.parent.parent.rglob("evil.json"))
 
+    @pytest.mark.parametrize("bad_id", ["abc\n", "abc\r\n", "abc\x00", " abc", "abc def"])
+    def test_wallet_id_must_match_completely(self, temp_keystore, bad_id):
+        assert rustchain_crypto._wallet_file(temp_keystore, bad_id) is None
+        seed_phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        result = rustchain_crypto.import_wallet(seed_phrase, bad_id, "pass-123")
+        assert "Invalid wallet_id" in result["error"]
+
+    def test_failed_write_leaves_no_keystore(self, temp_keystore):
+        with mock.patch.object(rustchain_crypto.json, "dump", side_effect=OSError(28, "No space left on device")):
+            with pytest.raises(OSError):
+                rustchain_crypto.create_wallet("half-written", "pass-123")
+
+        assert list(temp_keystore.iterdir()) == []
+        # The ID is still usable once the disk has room again
+        created = rustchain_crypto.create_wallet("half-written", "pass-123")
+        assert rustchain_crypto.load_wallet("half-written", "pass-123")["address"] == created["address"]
+        assert [f.name for f in temp_keystore.iterdir()] == ["half-written.json"]
+
+    def test_keystore_is_created_private(self, temp_keystore):
+        rustchain_crypto.create_wallet("private", "pass-123")
+        if os.name == "posix":
+            assert (temp_keystore / "private.json").stat().st_mode & 0o777 == 0o600
+
+    def test_batch_import_rejects_single_explicit_wallet_id(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "a", "address": "RTCa", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "b", "address": "RTCb", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+        ]})
+
+        result = rustchain_crypto.import_wallet(source, "same-id", "new-pass")
+
+        assert "single wallet" in result["error"]
+        assert not temp_keystore.exists() or list(temp_keystore.iterdir()) == []
+
+    def test_batch_import_reports_write_failures_and_continues(self, temp_keystore):
+        source = json.dumps({"wallets": [
+            {"wallet_id": "ok-1", "address": "RTC1", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "bad", "address": "RTC2", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+            {"wallet_id": "ok-2", "address": "RTC3", "encrypted_private_key": "x", "encrypted_mnemonic": "y"},
+        ]})
+        real_write = rustchain_crypto._write_new_keystore
+
+        def flaky(wallet_file, data):
+            if wallet_file.stem == "bad":
+                raise OSError(28, "No space left on device")
+            return real_write(wallet_file, data)
+
+        with mock.patch.object(rustchain_crypto, "_write_new_keystore", flaky):
+            result = rustchain_crypto.import_wallet(source, "", "new-pass")
+
+        assert result["wallets_imported"] == 2
+        assert result["failed"] == [{"wallet_id": "bad", "error": "No space left on device"}]
+        assert sorted(f.name for f in temp_keystore.iterdir()) == ["ok-1.json", "ok-2.json"]
+
     def test_import_keystore_json_skips_unsafe_wallet_id(self, temp_keystore):
         source = json.dumps({"wallets": [
             {"wallet_id": "../escape", "address": "RTCx", "encrypted_private_key": "x",

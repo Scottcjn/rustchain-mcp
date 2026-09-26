@@ -571,7 +571,7 @@ def get_keystore_path() -> Path:
     return Path.home() / ".rustchain" / "mcp_wallets"
 
 
-_WALLET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_WALLET_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def _wallet_file(keystore_path: Path, wallet_id: str) -> Optional[Path]:
@@ -580,7 +580,7 @@ def _wallet_file(keystore_path: Path, wallet_id: str) -> Optional[Path]:
     Wallet IDs reach here from tool arguments and from imported keystore JSON,
     so they must not be able to name a path outside the keystore directory.
     """
-    if not isinstance(wallet_id, str) or not _WALLET_ID_RE.match(wallet_id) or ".." in wallet_id:
+    if not isinstance(wallet_id, str) or not _WALLET_ID_RE.fullmatch(wallet_id) or ".." in wallet_id:
         return None
     return keystore_path / f"{wallet_id}.json"
 
@@ -614,19 +614,28 @@ def _require_password(password: str) -> None:
 def _write_new_keystore(wallet_file: Path, keystore_data: dict[str, Any]) -> None:
     """Write a keystore file, refusing to overwrite an existing one.
 
-    O_EXCL makes the existence check and the create atomic, and the file is
-    created with 0600 so key material is never briefly world-readable.
+    The keystore is written and fsynced under a temporary name, then
+    hard-linked into place: the link is atomic and fails if the target exists,
+    so a crash or full disk mid-write never leaves a truncated keystore that
+    blocks the wallet ID. Files are created 0600 with O_EXCL, so key material
+    is never world-readable and a planted symlink is never followed.
     """
+    tmp_file = wallet_file.with_name(f".{wallet_file.name}.{secrets.token_hex(8)}.tmp")
+    fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        fd = os.open(wallet_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        raise ValueError(
-            f"Wallet '{wallet_file.stem}' already exists; refusing to overwrite "
-            "its keys. Choose a different name or wallet_id."
-        ) from None
-    with os.fdopen(fd, 'w') as f:
-        json.dump(keystore_data, f, indent=2)
-    os.chmod(wallet_file, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(keystore_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp_file, wallet_file)
+        except FileExistsError:
+            raise ValueError(
+                f"Wallet '{wallet_file.stem}' already exists; refusing to overwrite "
+                "its keys. Choose a different name or wallet_id."
+            ) from None
+    finally:
+        tmp_file.unlink(missing_ok=True)
 
 
 def create_wallet(agent_name: str, password: str = "") -> dict[str, Any]:
@@ -860,10 +869,16 @@ def import_wallet(
         
         # Handle single wallet or wallet array
         wallets_to_import = imported_data.get("wallets", [imported_data])
+        if wallet_id and len(wallets_to_import) > 1:
+            return {
+                "error": "wallet_id can only be given when importing a single "
+                "wallet; batch imports keep each wallet's own wallet_id."
+            }
         
         imported_count = 0
         skipped_existing = []
         skipped_invalid = []
+        failed = []
         for wallet_data in wallets_to_import:
             target_id = wallet_id or wallet_data.get("wallet_id", f"imported-{__import__('time').time()}")
             
@@ -897,6 +912,9 @@ def import_wallet(
             except ValueError:
                 skipped_existing.append(str(target_id))
                 continue
+            except OSError as e:
+                failed.append({"wallet_id": str(target_id), "error": e.strerror or str(e)})
+                continue
             imported_count += 1
         
         result = {
@@ -914,6 +932,9 @@ def import_wallet(
             result["message"] += (
                 f"; skipped {len(skipped_invalid)} with an invalid wallet_id"
             )
+        if failed:
+            result["failed"] = failed
+            result["message"] += f"; {len(failed)} failed to write"
         return result
     except json.JSONDecodeError:
         pass
