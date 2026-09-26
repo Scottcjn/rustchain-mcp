@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+from urllib.parse import quote
 
 import httpx
 from fastmcp import FastMCP
@@ -146,6 +147,27 @@ def _handle_api_error(response: httpx.Response) -> str:
         return error_data.get("error") or error_data.get("message") or f"HTTP {response.status_code}"
     except Exception:
         return f"HTTP {response.status_code}: {response.text[:200]}"
+
+
+def _path_segment(value: str, field: str) -> str:
+    """Percent-encode ``value`` as exactly one URL path segment.
+
+    Tool arguments such as video_id or agent_id are interpolated into request
+    paths. Unencoded, "../x" or "abc?y=1" re-targets the request (httpx
+    resolves dot segments), so e.g. bottube_comment would send the caller's
+    X-API-Key to a different BoTTube endpoint. "." and ".." are rejected
+    outright because they are resolved even when percent-encoded.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    value = value.strip()
+    if value in (".", ".."):
+        raise ValueError(f"{field} must not be '.' or '..'")
+    return quote(value, safe="")
+
+
+def _invalid_argument(exc: ValueError) -> dict:
+    return {"ok": False, "error": str(exc), "code": "INVALID_ARGUMENT"}
 
 
 def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) -> dict:
@@ -663,7 +685,11 @@ def bcos_verify(cert_id: str) -> dict:
     Returns verification result including certificate validity,
     issuer, subject, and chain status.
     """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/verify/{cert_id}")
+    try:
+        cert_seg = _path_segment(cert_id, "cert_id")
+    except ValueError as exc:
+        return _invalid_argument(exc)
+    r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/verify/{cert_seg}")
     r.raise_for_status()
     return r.json()
 
@@ -915,7 +941,11 @@ def bottube_agent_profile(agent_name: str) -> dict:
 
     Returns the agent's video count, total views, bio, and recent uploads.
     """
-    r = get_client().get(f"{BOTTUBE_URL}/api/agents/{agent_name}")
+    try:
+        agent_seg = _path_segment(agent_name, "agent_name")
+    except ValueError as exc:
+        return _invalid_argument(exc)
+    r = get_client().get(f"{BOTTUBE_URL}/api/agents/{agent_seg}")
     r.raise_for_status()
     return r.json()
 
@@ -1023,12 +1053,16 @@ def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
 
     Returns the posted comment with ID and timestamp.
     """
+    try:
+        video_seg = _path_segment(video_id, "video_id")
+    except ValueError as exc:
+        return _invalid_argument(exc)
     headers = {}
     if api_key:
         headers["X-API-Key"] = api_key
 
     r = get_client().post(
-        f"{BOTTUBE_URL}/api/videos/{video_id}/comment",
+        f"{BOTTUBE_URL}/api/videos/{video_seg}/comment",
         json={"content": content},
         headers=headers,
     )
@@ -1047,12 +1081,16 @@ def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dic
 
     Returns updated vote count.
     """
+    try:
+        video_seg = _path_segment(video_id, "video_id")
+    except ValueError as exc:
+        return _invalid_argument(exc)
     headers = {}
     if api_key:
         headers["X-API-Key"] = api_key
 
     r = get_client().post(
-        f"{BOTTUBE_URL}/api/videos/{video_id}/vote",
+        f"{BOTTUBE_URL}/api/videos/{video_seg}/vote",
         json={"direction": direction},
         headers=headers,
     )
@@ -1192,7 +1230,11 @@ def beacon_agent_status(agent_id: str) -> dict:
     and profile URL. Works for both native and relay agents.
     """
     # Try relay status first (detailed info for relay agents)
-    r = get_client().get(f"{BEACON_URL}/relay/status/{agent_id}")
+    try:
+        agent_seg = _path_segment(agent_id, "agent_id")
+    except ValueError as exc:
+        return _invalid_argument(exc)
+    r = get_client().get(f"{BEACON_URL}/relay/status/{agent_seg}")
     if r.status_code == 200:
         return r.json()
 
