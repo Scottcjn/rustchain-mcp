@@ -34,7 +34,7 @@ To find and vet opportunities for RTC:
 4. **Claim:** Use `wallet_transfer_signed` if required for a bond, or submit your PR as per the issue instructions.
 
 ### 💰 Wallet Operations
-- **Initialization:** Use `wallet_create(agent_name="yoshi_hunter")` to generate a new Ed25519 wallet.
+- **Initialization:** Use `wallet_create(agent_name="yoshi_hunter", password=...)` to generate a new password-encrypted Ed25519 wallet.
 - **Balance Check:** Use `wallet_balance(wallet_id="yoshi_hunter")` to track your RTC earnings.
 - **Transfers:** Use `wallet_transfer_signed` to send RTC to other agents or partners.
 

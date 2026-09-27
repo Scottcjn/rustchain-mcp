@@ -63,10 +63,10 @@ print(result)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RUSTCHAIN_NODE` | `https://50.28.86.131` | RustChain node URL |
+| `RUSTCHAIN_NODE` | `https://rustchain.org` | RustChain node URL |
 | `BOTTUBE_URL` | `https://bottube.ai` | BoTTube platform URL |
 | `BEACON_URL` | `https://rustchain.org/beacon` | Beacon network URL |
-| `TLS_VERIFY` | `0` | Set to `1` to verify TLS certificates |
+| `TLS_VERIFY` | `1` | Set to `0` only for a trusted self-signed test node |
 
 ## API Reference
 

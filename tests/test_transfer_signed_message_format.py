@@ -18,6 +18,7 @@ Key invariants verified here:
   * The signature produced by the client verifies against the node's exact
     reconstruction.
 """
+
 import json
 import shutil
 import tempfile
@@ -29,8 +30,13 @@ import pytest
 from rustchain_mcp import rustchain_crypto
 from rustchain_mcp import server
 
-# The @mcp.tool() decorator wraps these as FunctionTool; .fn is the raw function.
-_wallet_transfer_signed = server.wallet_transfer_signed.fn
+
+def _raw_tool(tool):
+    """Support FastMCP releases that return either a wrapper or the function."""
+    return getattr(tool, "fn", tool)
+
+
+_wallet_transfer_signed = _raw_tool(server.wallet_transfer_signed)
 
 
 @pytest.fixture
@@ -58,11 +64,12 @@ def _node_reconstruct(payload: dict) -> bytes:
 
 
 def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
-    rustchain_crypto.create_wallet("signed-fmt-sender", password="")
+    rustchain_crypto.create_wallet("signed-fmt-sender", password="fmt-pass")
     captured = {}
 
     resp = mock.Mock()
-    resp.json.return_value = {"transaction_id": "tx_test", "new_balance": 0.0}
+    resp.json.return_value = {"ok": True, "phase": "pending", "tx_hash": "tx_test"}
+    resp.status_code = 200
     resp.raise_for_status = mock.Mock()
 
     def fake_post(url, json=None, **kwargs):
@@ -70,13 +77,15 @@ def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
         captured["payload"] = json
         return resp
 
-    # Under the installed fastmcp, @mcp.tool() wraps module functions as
-    # FunctionTool, so the internal wallet_transfer_signed -> rustchain_transfer_signed
-    # call must be pointed at the raw .fn to run. This still exercises the real
-    # payload-construction code under test.
-    with mock.patch("rustchain_mcp.server.get_client") as gc, \
-         mock.patch("rustchain_mcp.server.rustchain_transfer_signed",
-                    server.rustchain_transfer_signed.fn):
+    # Point the internal tool-to-tool call at the raw callable when FastMCP uses
+    # FunctionTool wrappers. This still exercises the real payload construction.
+    with (
+        mock.patch("rustchain_mcp.server.get_client") as gc,
+        mock.patch(
+            "rustchain_mcp.server.rustchain_transfer_signed",
+            _raw_tool(server.rustchain_transfer_signed),
+        ),
+    ):
         client = mock.Mock()
         client.post.side_effect = fake_post
         gc.return_value = client
@@ -84,7 +93,7 @@ def _run_transfer(temp_keystore, memo="", amount_rtc=1.5):
             from_wallet_id="signed-fmt-sender",
             to_address="RTC" + "b" * 40,
             amount_rtc=amount_rtc,
-            password="",
+            password="fmt-pass",
             memo=memo,
         )
     return captured["payload"]
@@ -110,8 +119,14 @@ def test_signed_message_verifies_with_empty_memo(temp_keystore):
 def test_payload_uses_node_field_names_only(temp_keystore):
     payload = _run_transfer(temp_keystore, memo="x")
     # Fields the node's preflight requires:
-    for field in ("from_address", "to_address", "amount_rtc", "nonce",
-                  "signature", "public_key"):
+    for field in (
+        "from_address",
+        "to_address",
+        "amount_rtc",
+        "nonce",
+        "signature",
+        "public_key",
+    ):
         assert field in payload, f"missing node-required field: {field}"
     # No fee anywhere, and no redundant canonical duplicates.
     assert "fee" not in payload and "fee_rtc" not in payload
@@ -130,9 +145,12 @@ def test_with_fee_key_would_not_verify(temp_keystore):
     proving the node-format is fee-free."""
     payload = _run_transfer(temp_keystore, memo="regression")
     tx = {
-        "from": payload["from_address"], "to": payload["to_address"],
-        "amount": float(payload["amount_rtc"]), "fee": 0.0,
-        "memo": payload.get("memo", ""), "nonce": str(int(str(payload["nonce"]))),
+        "from": payload["from_address"],
+        "to": payload["to_address"],
+        "amount": float(payload["amount_rtc"]),
+        "fee": 0.0,
+        "memo": payload.get("memo", ""),
+        "nonce": str(int(str(payload["nonce"]))),
     }
     bad_msg = json.dumps(tx, sort_keys=True, separators=(",", ":")).encode()
     assert not rustchain_crypto.verify_signature(

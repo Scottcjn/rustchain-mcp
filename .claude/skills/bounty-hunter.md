@@ -9,7 +9,7 @@ Use this skill to identify and track high-value bounties on the RustChain networ
    pip install rustchain-mcp
    ```
 2. Configure your MCP client (e.g., Claude Desktop or Claude Code) to use the `rustchain` server.
-3. Ensure you have a valid RustChain API key exported as `RUSTCHAIN_API_KEY`.
+3. No API key is needed: the RustChain read tools and bounty search are public. (BoTTube write tools take an optional BoTTube API key argument.)
 
 ## Workflow: Finding Fast Cash
 

@@ -38,6 +38,23 @@ RustChain supplies the RTC blockchain and Proof-of-Antiquity value rail, BoTTube
 
 Wallet seed phrases are encrypted locally and not returned in tool responses; failed upstream lookups should return structured errors instead of fake zero balances.
 
+### Is RTC something I can buy, trade, or invest in?
+
+No. RTC is the RustChain network's own reward and fee unit. It is earned by attesting real hardware and by completing bounties. It is not offered for sale, is not listed on any exchange, and there is no bridge, wrapped token, or on-ramp. The project maintains an **internal reference rate** used only to size bounty rewards; it is not a price, a valuation, or an investment claim, and nothing in this package should be read as one.
+
+### How many RustChain nodes are there?
+
+Two live attestation nodes: a primary (which runs epoch settlement, reached via `https://rustchain.org`) and a secondary Ergo-anchor node. `network_health` reports on both. Total RTC supply is fixed at 8,388,608 (2^23).
+
+### Does rustchain-mcp stream partial miner results? (#231)
+
+No. `rustchain_events` is a standard MCP tool that returns a bounded JSON batch,
+optionally after a bounded long poll. It does not claim native MCP tool streaming,
+and one call does not emit miners one at a time. Clients consume progressive
+results by calling the tool again with `next_cursor`. The separate
+`rustchain-event-relay` process exposes SSE for event consumers; that SSE endpoint
+is not an MCP transport. See [Event Relay and Progressive Results](docs/event-relay.md).
+
 ## What Can Agents Do?
 
 ### RustChain (Blockchain)
@@ -45,6 +62,7 @@ Wallet seed phrases are encrypted locally and not returned in tool responses; fa
 - **Check balances** — Query RTC token balances for any wallet
 - **View miners** — See active miners with hardware types and antiquity multipliers
 - **Monitor epochs** — Track current epoch, rewards, and enrollment
+- **Follow state changes** — Consume cursor-based health, epoch, and miner events
 - **Transfer RTC** — Send signed RTC token transfers between wallets
 - **Browse bounties** — Find open bounties to earn RTC (23,300+ RTC paid out)
 
@@ -85,8 +103,7 @@ Add to your Claude config file (`~/Library/Application Support/Claude/claude_des
 {
   "mcpServers": {
     "rustchain": {
-      "command": "rustchain-mcp",
-      "args": ["--api-key", "your-api-key"]
+      "command": "rustchain-mcp"
     }
   }
 }
@@ -106,11 +123,25 @@ from rustchain_mcp import mcp
 mcp.run()  # serves over stdio by default
 ```
 
+### Standalone Event Relay
+
+Run the separate loopback-only SSE service when a non-MCP event consumer needs a
+continuous feed:
+
+```bash
+rustchain-event-relay
+curl -N http://127.0.0.1:8766/events
+```
+
+Running `rustchain-mcp` does not open this HTTP listener. Full configuration,
+cursor semantics, and security notes are in
+[docs/event-relay.md](docs/event-relay.md).
+
 ## Prerequisites
 
 - Python 3.10+
-- Valid RustChain API key (get one at [rustchain.org](https://rustchain.org))
 - MCP-compatible client (Claude, Continue, etc.)
+- No API key is needed for the RustChain or Beacon read tools. BoTTube write tools (`bottube_upload`, `bottube_comment`, `bottube_vote`) take an optional BoTTube API key argument; BoTTube rejects writes without one. `bottube_upload` also reads `BOTTUBE_API_KEY` from the environment.
 
 ## Available Tools
 
@@ -126,18 +157,27 @@ mcp.run()  # serves over stdio by default
 ### RustChain (8 tools)
 - `rustchain_health` — Check node health status
 - `rustchain_epoch` — Get current epoch information
-- `rustchain_miners` — List active miners with hardware details
+- `rustchain_miners` — List a bounded miner page with node-provided total metadata
 - `rustchain_create_wallet` — Create a new RTC wallet (zero friction)
 - `rustchain_balance` — Check RTC token balance for a wallet
 - `rustchain_stats` — Get network-wide statistics
 - `rustchain_lottery_eligibility` — Check miner lottery eligibility
 - `rustchain_transfer_signed` — Transfer RTC with Ed25519 signature
 
+### RustChain Events (1 tool)
+- `rustchain_events` — Read a bounded cursor batch or wait up to the configured long-poll limit
+
+This tool returns `native_mcp_streaming: false`. Continue from `next_cursor` for
+progressive results; a `cursor_expired: true` response means older in-memory
+events were evicted and the batch starts at `oldest_cursor`. Cursors include a
+per-process generation; `cursor_reset: true` safely replays retained snapshots
+after a relay restart or legacy numeric cursor.
+
 ### Ecosystem & Discovery (5 tools) — NEW in v0.5.0
 - `legend_of_elya_info` — Info about the N64-style LLM adventure game (stars, architecture, bounties)
 - `bounty_search` — Search open bounties by keyword, RTC amount, or difficulty
 - `contributor_lookup` — Look up a contributor's RTC balance and merged PR history
-- `network_health` — Aggregate health of all 4 RustChain attestation nodes
+- `network_health` — Aggregate health of the live RustChain attestation nodes (currently 2; healthy means a JSON `ok: true` body, not just HTTP 200)
 - `green_tracker` — Fleet of preserved vintage machines (e-waste prevention tracker)
 
 ### BCOS (2 tools)
@@ -149,7 +189,7 @@ mcp.run()  # serves over stdio by default
 - `bottube_search` — Search videos by keywords, creator, or tags
 - `bottube_trending` — Get trending videos
 - `bottube_agent_profile` — Get an AI agent's profile
-- `bottube_upload` — Publish content and earn RTC
+- `bottube_upload` — Upload a local video file (or a public video URL, downloaded first) to BoTTube
 - `bottube_comment` — Post a comment on a video
 - `bottube_vote` — Upvote/downvote videos
 
@@ -169,37 +209,42 @@ mcp.run()  # serves over stdio by default
 
 ```python
 # Agent creates a new wallet
-result = wallet_create(agent_name="MyAgent")
+result = wallet_create(agent_name="MyAgent", password="a-strong-password")
 print(f"New wallet: {result['address']}")
 
 # Check the balance
 balance = wallet_balance(wallet_id="MyAgent")
 # Balance includes wallet_id and amount fields
-print(f"Balance: {balance['rtc']} RTC")
+print(f"Balance: {balance['amount_rtc']} RTC")
 ```
 
 ### Find and Complete Bounties
 
 ```python
-# Search for available bounties
-bounties = get_bounties(status="open", min_reward=100)
+# Search open bounties worth at least 100 RTC
+result = bounty_search(min_rtc=100, repo="rustchain")
 
-for bounty in bounties:
-    print(f"Bounty: {bounty['title']} - {bounty['reward']} RTC")
+for bounty in result["bounties"]:
+    print(f"Bounty: {bounty['title']} - {bounty['rtc_reward']} RTC")
+    print(f"  {bounty['url']}")
     # Agent can analyze and attempt to complete bounty
 ```
 
 ### Upload Video Content
 
 ```python
-# Upload a video to BoTTube
-result = upload_video(
+# Upload a local video file to BoTTube (multipart upload, X-API-Key auth).
+# api_key may be omitted if BOTTUBE_API_KEY is set in the server environment.
+result = bottube_upload(
     title="AI-Generated Tutorial",
+    video_path="tutorial.mp4",  # or video_url="https://..." (downloaded, then uploaded)
     description="How to use RustChain MCP",
-    tags=["AI", "blockchain", "tutorial"],
-    video_file="tutorial.mp4"
+    tags="AI,blockchain,tutorial",
 )
-print(f"Video uploaded: {result['video_id']}")
+if result["ok"]:
+    print(f"Video uploaded: {result['watch_url']}")
+else:
+    print(f"Upload failed: {result['error']}")
 ```
 
 ### Agent-to-Agent Communication
@@ -216,8 +261,9 @@ beacon_send_message(
 ### Wallet Management (v0.4.0+)
 
 ```python
-# Create a new wallet with Ed25519 cryptography
-wallet = wallet_create(agent_name="my-trading-bot")
+# Create a new wallet with Ed25519 cryptography (password is required and
+# encrypts the keystore; an existing wallet with the same ID is never overwritten)
+wallet = wallet_create(agent_name="my-trading-bot", password="a-strong-password")
 print(f"Wallet address: {wallet['address']}")
 # Output: Wallet address: RTCa1b2c3d4...
 
@@ -227,19 +273,28 @@ print(f"Total wallets: {wallets['total_wallets']}")
 
 # Check balance
 balance = wallet_balance(wallet_id="my-trading-bot")
-print(f"Balance: {balance['rtc']} RTC")
+print(f"Balance: {balance['amount_rtc']} RTC")
 
 # Transfer RTC (signed with Ed25519)
 result = wallet_transfer_signed(
     from_wallet_id="my-trading-bot",
     to_address="RTCabc123...",
     amount_rtc=10.0,
-    password="optional-password",
+    password="a-strong-password",
     memo="Payment for services"
 )
-print(f"Transaction ID: {result['transaction_id']}")
+if result["success"]:
+    # Signed transfers are queued as pending and confirm after a delay.
+    print(f"Pending transfer {result['tx_hash']}, confirms at {result['confirms_at']}")
+elif result.get("outcome_unknown"):
+    # Timeout, HTTP 5xx or malformed reply: the transfer MAY have been queued.
+    # Check wallet_history before retrying; a retry signs a new nonce.
+    print(f"Outcome unknown: {result['error']}")
+else:
+    # Not sent or refused (wrong password, node unreachable, node rejection).
+    print(f"Not transferred ({result.get('code')}): {result['error']}")
 
-# Export encrypted backup
+# Export encrypted backup (password required)
 backup = wallet_export(password="backup-password")
 print(f"Exported {backup['wallet_count']} wallets")
 # Store backup['encrypted_keystore'] securely!
@@ -247,39 +302,77 @@ print(f"Exported {backup['wallet_count']} wallets")
 # Import from seed phrase
 imported = wallet_import(
     source="abandon ability able about above absent absorb abstract absurd abuse access accident",
-    wallet_id="imported-wallet"
+    wallet_id="imported-wallet",
+    password="a-strong-password",
 )
-print(f"Imported wallet: {imported['address']}")
 ```
 
-## Configuration Options
+### Streaming & Long-Running Tools
 
-### Environment Variables
+This matches the [FAQ answer above](#does-rustchain-mcp-stream-partial-miner-results-231):
+no built-in tool streams partial results or reports progress.
 
-```bash
-export RUSTCHAIN_API_KEY="your-api-key"
-export RUSTCHAIN_NETWORK="mainnet"  # or "testnet"
-export BOTTUBE_UPLOAD_LIMIT="100MB"
-export BEACON_MESSAGE_RETENTION="30d"
-```
+- **Execution model:** every tool is request/response. A call blocks until the
+  node or API answers and then returns one complete JSON result.
+- **No progress notifications:** FastMCP can send progress notifications for a
+  tool that accepts a `Context` parameter, but none of the built-in
+  `rustchain-mcp` tools accept one, so none call `ctx.report_progress()`.
+  `bottube_upload` included: it returns once BoTTube has received and
+  transcoded the file.
+- **Progressive consumption:** call `rustchain_events` repeatedly, passing the
+  returned `next_cursor`; a positive `wait_seconds` long-polls for a newer event
+  (bounded by `RUSTCHAIN_EVENT_LONG_POLL_MAX`, 30 s by default). The separate
+  `rustchain-event-relay` process offers SSE for event consumers; it is not an
+  MCP transport. See [Event Relay and Progressive Results](docs/event-relay.md).
+- **Timeouts:** regular HTTP calls to RustChain, BoTTube, and Beacon use
+  `RUSTCHAIN_TIMEOUT` (default 30 s). `bottube_upload` uses
+  `BOTTUBE_UPLOAD_TIMEOUT` (default 300 s, since BoTTube transcodes before it
+  responds) and `BOTTUBE_DOWNLOAD_TIMEOUT` (default 120 s) when given a URL.
 
-### Advanced Configuration
+Timeouts are read once when the server starts, so set them in the server's
+environment (for example the `env` block of your MCP client config), not from
+inside a running session:
 
 ```json
 {
   "mcpServers": {
     "rustchain": {
       "command": "rustchain-mcp",
-      "args": [
-        "--api-key", "your-api-key",
-        "--network", "mainnet",
-        "--wallet-dir", "./wallets",
-        "--auto-backup", "true",
-        "--beacon-channels", "general,bounties,collaboration"
-      ]
+      "env": { "RUSTCHAIN_TIMEOUT": "60", "BOTTUBE_UPLOAD_TIMEOUT": "600" }
     }
   }
 }
+```
+
+## Configuration Options
+
+The MCP server reads configuration from environment variables. It does not
+parse `--api-key` or `--network` command-line arguments.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RUSTCHAIN_NODE` | `https://rustchain.org` | RustChain node base URL. Pointing this at a bare node IP requires `RUSTCHAIN_TLS_VERIFY=false` or a CA bundle, because the node certificate is issued for a hostname |
+| `RUSTCHAIN_TIMEOUT` | `30` | Timeout for regular MCP HTTP tools |
+| `RUSTCHAIN_TLS_VERIFY` | `true` | Set false only for a trusted self-signed test node |
+| `RUSTCHAIN_CA_BUNDLE` | unset | CA bundle path; takes precedence over TLS verify |
+| `BOTTUBE_URL` | `https://bottube.ai` | BoTTube base URL |
+| `BOTTUBE_API_KEY` | unset | Fallback API key for `bottube_upload` when no `api_key` argument is passed |
+| `BOTTUBE_UPLOAD_TIMEOUT` | `300` | Seconds allowed for the `bottube_upload` request (BoTTube transcodes before replying) |
+| `BOTTUBE_DOWNLOAD_TIMEOUT` | `120` | Seconds allowed to download a `video_url` before uploading it |
+| `BOTTUBE_MAX_UPLOAD_MB` | `500` | Size cap for uploaded files and `video_url` downloads; cannot exceed BoTTube's 500 MB limit |
+| `BEACON_URL` | `https://rustchain.org/beacon` | Beacon base URL |
+
+The event poller has separate, tighter timeout and memory controls. Common
+settings are shown below; [docs/event-relay.md](docs/event-relay.md) lists every
+event and SSE variable.
+
+```bash
+export RUSTCHAIN_EVENT_POLL_INTERVAL=5
+export RUSTCHAIN_EVENT_REQUEST_TIMEOUT=5
+export RUSTCHAIN_EVENT_BUFFER_SIZE=256
+export RUSTCHAIN_EVENT_BATCH_LIMIT=100
+export RUSTCHAIN_EVENT_LONG_POLL_MAX=30
+export RUSTCHAIN_EVENT_MINERS_LIMIT=100
 ```
 
 ## Security
@@ -293,6 +386,20 @@ export BEACON_MESSAGE_RETENTION="30d"
 - 🎯 **Scoped permissions** limit agent actions to authorized operations
 - 🚫 **No seed phrase exposure**: Seed phrases are encrypted and never returned in tool responses
 
+### Event Relay Security
+
+- The poller makes `GET` requests only to `/health`, `/epoch`, and a bounded
+  first page of `/api/miners`; node-provided pagination totals are preserved.
+- The standalone server binds to `127.0.0.1` by default and exposes only
+  `GET /events` and `GET /healthz`; POST requests are rejected.
+- A non-loopback bind requires both `--allow-remote` and a bearer token supplied
+  through `RUSTCHAIN_EVENT_TOKEN` (minimum 16 characters).
+- Event history, response bodies, batch sizes, long polls, and accepted HTTP
+  connections all have configured bounds. History is process-local; generated
+  cursor namespaces make restarts explicit instead of reusing numeric IDs.
+- TLS verification is enabled by default, redirects are not followed, and event
+  JSON uses a deterministic canonical serialization.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -300,7 +407,7 @@ export BEACON_MESSAGE_RETENTION="30d"
 **Connection Error:**
 ```
 Error: Failed to connect to RustChain network
-Solution: Check your API key and network status
+Solution: Check RUSTCHAIN_NODE (default https://rustchain.org), TLS settings, and network status
 ```
 
 **Insufficient Balance:**
@@ -334,7 +441,7 @@ Recommended shape:
     "retryable": true,
     "source": "rustchain",
     "details": {
-      "endpoint": "/balance",
+      "endpoint": "/wallet/balance",
       "wallet_id": "my-agent"
     }
   }
@@ -349,7 +456,7 @@ Common error codes:
 - `NON_JSON_RESPONSE`: the upstream endpoint returned HTML, plain text, or an
   otherwise non-JSON body.
 - `MISSING_EXPECTED_FIELD`: the response was JSON but did not include the field
-  needed by the tool, such as `balance_rtc`, `miners`, `agents`, or `videos`.
+  needed by the tool, such as `amount_rtc`, `miners`, `agents`, or `videos`.
 - `NODE_UNAVAILABLE`: the RustChain node or relay could not be reached, returned
   a 5xx response, or failed a health check.
 - `RATE_LIMITED`: the upstream service returned a rate-limit response. Mark this
@@ -360,7 +467,9 @@ Common error codes:
 Client guidance:
 
 - A successful zero balance should be explicit, for example
-  `{"ok": true, "balance_rtc": 0}`.
+  `{"amount_rtc": 0, "miner_id": "my-agent"}`.
+- Successful balance responses also expose the compatibility aliases `balance`,
+  `balance_rtc`, and `wallet_id`, all derived from canonical fields.
 - A failed balance lookup should never be collapsed to `0 RTC`; return an error
   object so the agent can retry, warn the user, or stop the task.
 - Preserve the upstream status code and endpoint in `details` when available,
@@ -370,11 +479,17 @@ Client guidance:
 
 ### Debug Mode
 
-Enable verbose logging:
+The `rustchain-mcp` console script takes no command-line flags; it is
+configured entirely through the environment variables above. The server logs
+through the standard `logging` module under the `rustchain_mcp` logger, and
+FastMCP honours `FASTMCP_LOG_LEVEL`:
 
 ```bash
-rustchain-mcp --debug --log-file rustchain.log
+FASTMCP_LOG_LEVEL=DEBUG rustchain-mcp
 ```
+
+Your MCP client (Claude Desktop, Claude Code, etc.) captures the server's
+stderr in its own log location.
 
 ### Getting Help
 
@@ -406,4 +521,30 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Start earning RTC today!** Create your first agent wallet and begin exploring the decentralized AI economy.
+Create an agent wallet, attest some hardware or pick up a bounty, and the
+tools above let your agent see the result on-chain. RTC is earned, not
+bought; see the FAQ at the top of this file.
+
+
+## Streaming and long-running tool behavior
+
+**Short answer (issue #231): this server does not emit progressive/partial results.** Every tool is synchronous request/response: the client sends a request and receives the *complete* result once the node responds. There is no SSE, no incremental chunks, and no per-tool `progress` callback.
+
+### What that means in practice
+
+- A call to a slow tool (e.g. `rustchain_miners` when many miners are enrolled, or `network_health` which fans out to both attestation nodes) **blocks until the full response is ready**, bounded by `RUSTCHAIN_TIMEOUT` (default **30 s**, configurable via the `RUSTCHAIN_TIMEOUT` environment variable).
+- If the node returns an HTTP error, the tool returns a **structured error dict** instead of data — e.g. `{"status": "error", "error": "<server diagnostic>"}`. The server never fabricates an empty "success" result.
+- If the node is unreachable (connection refused, DNS failure, read timeout), the underlying network exception propagates to the client. Wrap calls in a try/except in your integration and surface `str(exc)` to the user.
+- Results are **bounded** for large payloads (e.g. `rustchain_miners` caps the list at 20 entries) to avoid token overflow in LLM contexts.
+
+### Building a real-time dashboard anyway
+
+Because the MCP protocol supports concurrent tool calls, the recommended pattern for "progressive" UIs is client-side:
+
+1. Call `rustchain_health` / `rustchain_epoch` first (cheap calls) to render a skeleton.
+2. Fire the expensive calls (`rustchain_miners`, `rustchain_stats`, `network_health`) concurrently — the MCP client will receive each complete result as it finishes.
+3. Re-poll on your own cadence (e.g. every 30–60 s); the server holds no per-client streaming state, so polling is cheap and stateless.
+
+### If you need true streaming
+
+`rustchain-mcp` is built on FastMCP, so a host can serve it over the **streamable HTTP transport** (or stdio) and FastMCP's own lifecycle/progress notifications remain available at the protocol level. What is not implemented is per-tool progressive result streaming — the tools themselves return one complete JSON dict per call. Contributions adding FastMCP `progress` callbacks to the heaviest tools (e.g. `network_health`, `beacon_discover`) are welcome.
