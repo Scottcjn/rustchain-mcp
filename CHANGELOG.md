@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- The evangelist agent no longer publishes made-up numbers. When live node
+  or BoTTube stats can't be fetched (error, non-200, missing field), the stats
+  post is skipped and the reason is logged; it used to fall back to hard-coded
+  "130 agents / 850 videos / 57,000 views". The stale hard-coded payout totals
+  were removed from the how-to post (#308).
+- Beacon pings only offer the 5 RTC first-call tip when the agent wallet's live
+  balance covers a tip for every ping in the run; otherwise the tip is left out
+  of both the offer and the message (#308).
+
 ## 0.5.0
 
 ### Breaking
