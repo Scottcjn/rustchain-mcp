@@ -415,42 +415,83 @@ class TestRunOnce:
         assert result > 0  # Should ping some agents
         assert post_called  # Should post to Moltbook
     
-    def test_run_with_no_agents(self, monkeypatch):
-        """Test run when no agents are discovered."""
-        # Setup empty mocks
+    def _setup_no_agents(self, monkeypatch):
+        """No discoverable agents; returns (ping_calls, post_calls) trackers."""
         mock_beacon = MockBeaconService()
         mock_beacon.agents = []  # No agents
         setup_beacon_mocks(monkeypatch, mock_beacon)
-        
+
         mock_bottube = MockBoTTubeService()
         mock_bottube.stats["top_agents"] = []  # No top agents
         setup_bottube_mocks(monkeypatch, mock_bottube)
-        
-        # Mock API key
+
         monkeypatch.setenv("MOLTBOOK_API_KEY", "valid-key")
-        
-        # Track calls
+
         ping_calls = []
         def mock_ping(agent_id, message, dry_run=False, offer_tip=False):
             ping_calls.append(agent_id)
             return True
-        
-        post_called = False
+
+        post_calls = []
         def mock_post(title, content, submolt, dry_run=False):
-            nonlocal post_called
-            post_called = True
+            post_calls.append((title, content, submolt))
             return True
-        
+
         monkeypatch.setattr(evangelist_agent, "beacon_ping_agent", mock_ping)
         monkeypatch.setattr(evangelist_agent, "post_to_moltbook", mock_post)
-        
-        # Run
+        return ping_calls, post_calls
+
+    def test_run_with_no_agents_and_no_live_stats_skips_post(self, monkeypatch):
+        """No agents and no live stats -> no pings, no post, skip is logged.
+
+        Hour 0 selects the stats post; the mocked client has no /health
+        endpoint (404), so live stats are unavailable. Issue #308: the run
+        must skip the post rather than publish placeholder numbers.
+        """
+        ping_calls, post_calls = self._setup_no_agents(monkeypatch)
+        _pin_hour(monkeypatch, hour=0)
+
+        warnings, infos = [], []
+        monkeypatch.setattr(evangelist_agent.log, "warning", lambda msg, *a, **k: warnings.append(msg))
+        monkeypatch.setattr(evangelist_agent.log, "info", lambda msg, *a, **k: infos.append(msg))
+
         result = evangelist_agent.run_once(dry_run=False)
-        
-        # Verify no pings but still posts
+
         assert result == 0  # No agents to ping
-        assert len(ping_calls) == 0
-        assert post_called  # Should still post to Moltbook
+        assert ping_calls == []
+        assert post_calls == []  # Never posts without live stats
+        assert any("Skipping stats post" in m for m in warnings)
+        assert any("Run complete: 0 pings, 0 post(s)" in m for m in infos)
+
+    def test_run_with_no_agents_and_live_stats_posts(self, monkeypatch):
+        """No agents but live stats available -> the stats post goes out
+        carrying exactly the fetched numbers."""
+        ping_calls, post_calls = self._setup_no_agents(monkeypatch)
+        _pin_hour(monkeypatch, hour=0)
+        monkeypatch.setattr(
+            evangelist_agent,
+            "fetch_live_stats",
+            lambda: (
+                {"version": "9.8.7", "ok": True, "uptime_s": 7200},
+                {"agents": 321, "videos": 654, "total_views": 98765},
+            ),
+        )
+
+        infos = []
+        monkeypatch.setattr(evangelist_agent.log, "info", lambda msg, *a, **k: infos.append(msg))
+
+        result = evangelist_agent.run_once(dry_run=False)
+
+        assert result == 0
+        assert ping_calls == []
+        assert len(post_calls) == 1
+        title, content, submolt = post_calls[0]
+        assert submolt == "rustchain"
+        assert "321" in title
+        assert "v9.8.7" in content
+        assert "654 videos" in content
+        assert "98,765" in content
+        assert any("Run complete: 0 pings, 1 post(s)" in m for m in infos)
     
     @patch.object(evangelist_agent.log, 'info')
     def test_logging_during_run(self, mock_log, monkeypatch):
