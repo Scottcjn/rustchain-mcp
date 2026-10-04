@@ -41,29 +41,24 @@ class TestGenerateOnboardingPost:
         assert "150" in post["content"]  # Agents from stats
         assert "900" in post["content"]  # Videos from stats
     
-    def test_fallback_when_apis_fail(self, monkeypatch):
-        """Test post generation when APIs fail (fallback to defaults)."""
+    def test_skips_stats_post_when_apis_fail(self, monkeypatch):
+        """Issue #308: no live stats -> no stats post (never placeholder numbers)."""
         mock_client = Mock()
         mock_client.get.side_effect = Exception("API unavailable")
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         _pin_hour(monkeypatch)
         
-        post = evangelist_agent.generate_onboarding_post()
-        
-        # Should still generate post with fallback values
-        assert "title" in post
-        assert "submolt" in post
-        assert "content" in post
-        
-        # Should contain fallback values
-        assert "2.2.1" in post["content"]  # Fallback version
-        assert "130" in post["content"]  # Fallback agents
-        assert "850" in post["content"]  # Fallback videos
+        assert evangelist_agent.generate_onboarding_post() is None
     
     def test_template_rotation_by_hour(self, monkeypatch):
         """Test post template rotates based on UTC hour."""
+        def live_get(url, **kwargs):
+            if url.endswith("/health"):
+                return Mock(status_code=200, json=lambda: {"version": "2.3.0", "ok": True})
+            return Mock(status_code=200, json=lambda: {"agents": 1, "videos": 2, "total_views": 3})
+
         mock_client = Mock()
-        mock_client.get.side_effect = Exception("API unavailable")
+        mock_client.get.side_effect = live_get
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
         # Test different hours
@@ -85,9 +80,11 @@ class TestGenerateOnboardingPost:
                 post = evangelist_agent.generate_onboarding_post()
                 assert post["submolt"] == expected_submolt
     
-    def test_post_structure(self):
+    def test_post_structure(self, monkeypatch):
         """Test generated post has correct structure."""
-        # Mock APIs to fail so we get consistent output
+        # Odd hour -> how-to post, which needs no live stats, so a failing
+        # API still gives consistent output.
+        _pin_hour(monkeypatch, hour=1)
         with patch.object(evangelist_agent.client, 'get', side_effect=Exception("API fail")):
             post = evangelist_agent.generate_onboarding_post()
             
@@ -107,7 +104,7 @@ class TestBeaconPingAgent:
         mock_client.post.return_value = Mock(status_code=202, json=lambda: {"status": "sent"})
         monkeypatch.setattr(evangelist_agent, "client", mock_client)
         
-        result = evangelist_agent.beacon_ping_agent("agent-123", "Test message")
+        result = evangelist_agent.beacon_ping_agent("agent-123", "Test message", offer_tip=True)
         
         assert result is True
         
@@ -343,7 +340,7 @@ class TestRunOnce:
         post_calls = []
         
         # Mock beacon_ping_agent
-        def mock_ping(agent_id, message, dry_run=False):
+        def mock_ping(agent_id, message, dry_run=False, offer_tip=False):
             ping_calls.append((agent_id, dry_run))
             return True
         monkeypatch.setattr(evangelist_agent, "beacon_ping_agent", mock_ping)
@@ -353,6 +350,14 @@ class TestRunOnce:
             post_calls.append((title, submolt, dry_run))
             return True
         monkeypatch.setattr(evangelist_agent, "post_to_moltbook", mock_post)
+        
+        # Workflow test: the post content and tip budget are covered elsewhere.
+        monkeypatch.setattr(
+            evangelist_agent,
+            "generate_onboarding_post",
+            lambda: {"title": "T", "content": "C", "submolt": "rustchain"},
+        )
+        monkeypatch.setattr(evangelist_agent, "wallet_can_cover_tip", lambda amount: False)
         
         # Run in dry-run mode
         result = evangelist_agent.run_once(dry_run=True)
@@ -381,7 +386,7 @@ class TestRunOnce:
         
         # Mock ping and post functions
         ping_count = 0
-        def mock_ping(agent_id, message, dry_run=False):
+        def mock_ping(agent_id, message, dry_run=False, offer_tip=False):
             nonlocal ping_count
             ping_count += 1
             return True
@@ -394,6 +399,14 @@ class TestRunOnce:
         
         monkeypatch.setattr(evangelist_agent, "beacon_ping_agent", mock_ping)
         monkeypatch.setattr(evangelist_agent, "post_to_moltbook", mock_post)
+        
+        # Workflow test: the post content and tip budget are covered elsewhere.
+        monkeypatch.setattr(
+            evangelist_agent,
+            "generate_onboarding_post",
+            lambda: {"title": "T", "content": "C", "submolt": "rustchain"},
+        )
+        monkeypatch.setattr(evangelist_agent, "wallet_can_cover_tip", lambda amount: False)
         
         # Run
         result = evangelist_agent.run_once(dry_run=False)
@@ -418,7 +431,7 @@ class TestRunOnce:
         
         # Track calls
         ping_calls = []
-        def mock_ping(agent_id, message, dry_run=False):
+        def mock_ping(agent_id, message, dry_run=False, offer_tip=False):
             ping_calls.append(agent_id)
             return True
         
