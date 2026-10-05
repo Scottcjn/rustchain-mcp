@@ -526,7 +526,15 @@ tools above let your agent see the result on-chain. RTC is earned, not
 bought; see the FAQ at the top of this file.
 
 
-## Streaming and long-running tool behavior
+## Streaming & long-running tools
+
+The MCP server advertises the following capabilities:
+- `tools`: `ToolsCapability(list_changed=False)`
+- `resources`: `ResourcesCapability(subscribe=False, list_changed=False)`
+- `prompts`: `PromptsCapability(list_changed=False)`
+- `logging`: `LoggingCapability()`
+
+There are no streaming or progress capability flags advertised.
 
 **Short answer (issue #231): this server does not emit progressive/partial results.** Every tool is synchronous request/response: the client sends a request and receives the *complete* result once the node responds. There is no SSE, no incremental chunks, and no per-tool `progress` callback.
 
