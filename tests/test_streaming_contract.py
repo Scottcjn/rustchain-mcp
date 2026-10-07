@@ -66,7 +66,10 @@ def test_long_running_tool_is_request_response_full_result():
     This is the documented streaming contract: no partial/progressive
     results are emitted; the caller receives the complete dict.
     """
-    payload = {"miners": [{"wallet": "RTCaaa", "hw": "486"} for _ in range(25)]}
+    payload = {
+        "miners": [{"wallet": "RTCaaa", "hw": "486"} for _ in range(25)],
+        "total_miners": 25,
+    }
     fake = FakeClient([FakeResponse(200, payload)])
     with _install_client(fake):
         result = server.rustchain_miners()
