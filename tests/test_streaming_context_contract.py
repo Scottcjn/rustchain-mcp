@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from mcp.server.lowlevel.server import NotificationOptions
