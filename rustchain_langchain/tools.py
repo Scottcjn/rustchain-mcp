@@ -13,7 +13,14 @@ Usage with CrewAI:
     agent = Agent(tools=[rustchain_balance, beacon_discover])
 """
 
+import ipaddress
+import math
 import os
+import pathlib
+import socket
+import tempfile
+from urllib.parse import urljoin, urlsplit
+
 import requests
 
 # TLS verification is on by default: these requests carry API keys and bearer
@@ -40,6 +47,105 @@ RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://rustchain.org")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
 BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 
+_ALLOWED_VIDEO_EXT = (".mp4", ".webm", ".avi", ".mkv", ".mov")
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+_MAX_REDIRECTS = 5
+_DOWNLOAD_CHUNK = 64 * 1024
+_CONTENT_TYPE_EXT = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/x-msvideo": ".avi",
+    "video/avi": ".avi",
+    "video/x-matroska": ".mkv",
+    "video/quicktime": ".mov",
+}
+_EXT_CONTENT_TYPE = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+}
+
+
+def _safe_nonneg_int(val, default: int = 0) -> int:
+    if val is None or isinstance(val, bool):
+        return default
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        return default
+
+
+def _check_public_url(url: str) -> None:
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError("video_url must use http:// or https://")
+    host = parts.hostname
+    if not host:
+        raise ValueError("video_url has no hostname")
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    addresses = [info[4][0] for info in infos]
+    if not addresses:
+        raise ValueError(f"could not resolve video_url host {host!r}")
+    for addr in addresses:
+        ip = ipaddress.ip_address(addr.split("%", 1)[0])
+        if not ip.is_global:
+            raise ValueError(
+                f"video_url host {host!r} resolves to non-public IP {ip}; use video_path instead"
+            )
+
+
+def _download_public_video(url: str, limit: int = _MAX_UPLOAD_BYTES) -> tuple[pathlib.Path, str]:
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        _check_public_url(current)
+        with requests.get(
+            current,
+            stream=True,
+            allow_redirects=False,
+            timeout=120,
+            verify=_TLS_VERIFY,
+        ) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("location")
+                if not loc:
+                    raise ValueError(f"redirect ({resp.status_code}) missing Location header")
+                current = urljoin(current, loc)
+                continue
+            resp.raise_for_status()
+            ext = pathlib.PurePosixPath(urlsplit(current).path).suffix.lower()
+            if ext not in _ALLOWED_VIDEO_EXT:
+                mime = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                ext = _CONTENT_TYPE_EXT.get(mime, "")
+                if not ext:
+                    raise ValueError(f"unsupported video format; allowed: {', '.join(_ALLOWED_VIDEO_EXT)}")
+            declared = resp.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > limit:
+                raise ValueError("video_url exceeds 500 MB upload limit")
+            fd, tmp_name = tempfile.mkstemp(prefix="bottube-lc-", suffix=ext)
+            tmp_path = pathlib.Path(tmp_name)
+            total = 0
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=_DOWNLOAD_CHUNK):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > limit:
+                            raise ValueError("video_url exceeded 500 MB upload limit while downloading")
+                        fh.write(chunk)
+                if total == 0:
+                    raise ValueError("video_url returned an empty body")
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
+            name = pathlib.PurePosixPath(urlsplit(current).path).name
+            if not name.lower().endswith(ext):
+                name = f"video{ext}"
+            return tmp_path, name
+    raise ValueError(f"video_url redirected more than {_MAX_REDIRECTS} times")
+
 
 def _get(url: str, params: dict = None, timeout: int = 30) -> dict:
     """Make GET request with error handling."""
@@ -59,10 +165,11 @@ def _post(url: str, json_data: dict, headers: dict = None, timeout: int = 30) ->
 def rustchain_health() -> str:
     """Check RustChain node health. Returns version, uptime, and database status."""
     data = _get(f"{RUSTCHAIN_NODE}/health")
+    uptime_s = _safe_nonneg_int(data.get("uptime_s"), 0)
     return (
         f"RustChain Node: {'Healthy' if data.get('ok') else 'Unhealthy'}\n"
         f"Version: {data.get('version', 'unknown')}\n"
-        f"Uptime: {data.get('uptime_s', 0) // 3600}h {(data.get('uptime_s', 0) % 3600) // 60}m\n"
+        f"Uptime: {uptime_s // 3600}h {(uptime_s % 3600) // 60}m\n"
         f"Database: {'Read/Write' if data.get('db_rw') else 'Read-only'}"
     )
 
@@ -76,16 +183,23 @@ def rustchain_balance(wallet_id: str) -> str:
 
     Returns balance in RTC tokens. 1 RTC = $0.10 USD reference rate.
     """
-    data = _get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
-    raw = data.get("balance")
-    if raw is None:
-        raw = data.get("amount", 0)
+    data = _get(f"{RUSTCHAIN_NODE}/wallet/balance", params={"miner_id": wallet_id})
+    for key in ("amount_rtc", "balance", "amount"):
+        if key in data:
+            raw = data[key]
+            break
+    else:
+        raw = 0
+    if isinstance(raw, bool):
+        return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
     # The node may return a null/absent/non-numeric balance (e.g. for an unknown
     # or empty wallet). Coerce safely so the tool never crashes with TypeError/
     # ValueError on float(None) / float("not-a-number").
     try:
         balance = float(raw)
     except (TypeError, ValueError):
+        return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
+    if not math.isfinite(balance):
         return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
     return f"Wallet {wallet_id}: {balance:g} RTC (${balance * 0.10:.2f} USD reference)"
 
@@ -158,13 +272,16 @@ def bottube_stats() -> str:
         f"  Comments: {data.get('comments', 0):,}",
         f"  Likes: {data.get('likes', 0):,}",
     ]
-    top = data.get("top_agents", [])[:5]
+    top = [a for a in (data.get("top_agents") or []) if isinstance(a, dict)][:5]
     if top:
         lines.append("  Top creators:")
         for a in top:
+            agent_name = a.get("agent_name", a.get("username", "unknown"))
+            video_count = _safe_nonneg_int(a.get("video_count"), 0)
+            total_views = _safe_nonneg_int(a.get("total_views"), 0)
             lines.append(
-                f"    {a['agent_name']}: {a['video_count']} videos, "
-                f"{a['total_views']:,} views"
+                f"    {agent_name}: {video_count} videos, "
+                f"{total_views:,} views"
             )
     return "\n".join(lines)
 
@@ -177,41 +294,102 @@ def bottube_search(query: str) -> str:
         query: Search query (matches title, description, tags)
     """
     data = _get(f"{BOTTUBE_URL}/api/search", params={"q": query})
-    videos = data if isinstance(data, list) else data.get("videos", [])
+    videos = data if isinstance(data, list) else (data.get("videos") or [])
     if not videos:
         return f"No videos found for '{query}'"
     lines = [f"Found {len(videos)} videos for '{query}':"]
     for v in videos[:5]:
-        title = v.get("title", "Untitled")[:60]
+        if not isinstance(v, dict):
+            continue
+        title = str(v.get("title") or "Untitled")[:60]
         creator = v.get("creator", v.get("agent_name", "unknown"))
-        views = v.get("views", 0)
+        views = _safe_nonneg_int(v.get("views"), 0)
         lines.append(f"  [{title}] by {creator} ({views} views)")
     return "\n".join(lines)
 
 
 @tool
-def bottube_upload(title: str, video_url: str, description: str = "", tags: str = "") -> str:
-    """Upload a video to BoTTube AI video platform.
+def bottube_upload(
+    title: str,
+    video_url: str = "",
+    description: str = "",
+    tags: str = "",
+    video_path: str = "",
+) -> str:
+    """Upload a video to BoTTube AI video platform via multipart/form-data.
 
     Args:
         title: Video title (max 200 chars)
-        video_url: URL of the video file
+        video_url: Public HTTP(S) URL of the video file to download & upload
         description: Video description
         tags: Comma-separated tags
+        video_path: Local file path of the video (.mp4, .webm, .avi, .mkv, .mov)
 
-    Requires BOTTUBE_API_KEY environment variable.
+    Requires BOTTUBE_API_KEY environment variable. Provide either video_url or video_path.
     """
-    api_key = os.environ.get("BOTTUBE_API_KEY", "")
+    api_key = os.environ.get("BOTTUBE_API_KEY", "").strip()
     if not api_key:
         return "Error: BOTTUBE_API_KEY environment variable not set. Get one at bottube.ai"
 
-    data = _post(
-        f"{BOTTUBE_URL}/api/upload",
-        json_data={"title": title, "video_url": video_url, "description": description, "tags": tags},
-        headers={"X-API-Key": api_key},
-    )
-    video_id = data.get("id", data.get("video_id", "unknown"))
-    return f"Video uploaded! ID: {video_id}, Watch at: https://bottube.ai/watch/{video_id}"
+    clean_title = (title or "").strip()
+    if not clean_title:
+        return "Error: title is required"
+    if len(clean_title) > 200:
+        return f"Error: title is {len(clean_title)} chars; max is 200"
+
+    v_url = (video_url or "").strip()
+    v_path = (video_path or "").strip()
+    if bool(v_url) == bool(v_path):
+        return "Error: provide exactly one of video_url or video_path"
+
+    clean_tags = ",".join(t.strip() for t in (tags or "").split(",") if t.strip())
+    fields = {
+        "title": clean_title,
+        "description": (description or "").strip(),
+        "tags": clean_tags,
+    }
+
+    tmp_path = None
+    try:
+        if v_path:
+            file_path = pathlib.Path(v_path).expanduser()
+            if not file_path.is_file():
+                return f"Error: video_path not found: {v_path}"
+            if file_path.suffix.lower() not in _ALLOWED_VIDEO_EXT:
+                return f"Error: unsupported video extension {file_path.suffix!r}"
+            if file_path.stat().st_size == 0:
+                return f"Error: video_path is empty: {v_path}"
+            filename = file_path.name
+        else:
+            tmp_path, filename = _download_public_video(v_url)
+            file_path = tmp_path
+
+        mime = _EXT_CONTENT_TYPE.get(
+            pathlib.PurePosixPath(filename).suffix.lower(),
+            "application/octet-stream",
+        )
+        with open(file_path, "rb") as fh:
+            resp = requests.post(
+                f"{BOTTUBE_URL}/api/upload",
+                headers={"X-API-Key": api_key},
+                data=fields,
+                files={"video": (filename, fh, mime)},
+                timeout=300,
+                verify=_TLS_VERIFY,
+            )
+        resp.raise_for_status()
+        data = resp.json()
+    except (ValueError, requests.exceptions.RequestException, OSError) as exc:
+        return f"Error uploading video: {exc}"
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    video_id = data.get("video_id", data.get("id", "unknown"))
+    watch_url = data.get("watch_url") or f"https://bottube.ai/watch/{video_id}"
+    if isinstance(watch_url, str) and watch_url.startswith("/"):
+        watch_url = f"{BOTTUBE_URL}{watch_url}"
+    return f"Video uploaded! ID: {video_id}, Watch at: {watch_url}"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -227,16 +405,21 @@ def beacon_discover(capability: str = "") -> str:
         capability: Filter by capability. Empty = list all agents.
     """
     data = _get(f"{BEACON_URL}/api/agents")
-    agents = data if isinstance(data, list) else []
+    raw_agents = data if isinstance(data, list) else (data.get("agents") or []) if isinstance(data, dict) else []
+    agents = [a for a in raw_agents if isinstance(a, dict)]
     if capability:
-        agents = [a for a in agents if capability.lower() in
-                  [c.lower() for c in a.get("capabilities", [])]]
+        cap_lower = capability.lower()
+        agents = [
+            a for a in agents
+            if cap_lower in [c.lower() for c in (a.get("capabilities") or []) if isinstance(c, str)]
+        ]
     lines = [f"Beacon agents: {len(agents)}"]
     for a in agents[:15]:
-        name = a.get("name", a.get("agent_id", "?"))
+        agent_id = a.get("agent_id", "?")
+        name = a.get("name", agent_id)
         status = a.get("status", "unknown")
         relay = " (relay)" if a.get("relay") else ""
-        lines.append(f"  {a['agent_id']}: {name} [{status}]{relay}")
+        lines.append(f"  {agent_id}: {name} [{status}]{relay}")
     if len(agents) > 15:
         lines.append(f"  ... and {len(agents) - 15} more")
     return "\n".join(lines)

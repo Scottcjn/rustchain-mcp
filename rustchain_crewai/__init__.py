@@ -15,6 +15,7 @@ Usage with CrewAI:
     )
 """
 
+import math
 import os
 import requests
 from typing import Type
@@ -26,6 +27,15 @@ except ImportError:
     raise ImportError(
         "crewai is required. Install with: pip install crewai"
     )
+
+
+def _safe_nonneg_int(val, default: int = 0) -> int:
+    if val is None or isinstance(val, bool):
+        return default
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        return default
 
 # TLS verification is on by default: these requests carry API keys and bearer
 # tokens. Set RUSTCHAIN_TLS_VERIFY=0 (same variable as the MCP server; the
@@ -78,11 +88,24 @@ class RustChainCheckBalance(BaseTool):
     args_schema: Type[BaseModel] = CheckBalanceInput
 
     def _run(self, wallet_id: str) -> str:
-        data = _get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
+        data = _get(f"{RUSTCHAIN_NODE}/wallet/balance", params={"miner_id": wallet_id})
         if "error" in data:
             return f"Error checking balance: {data['error']}"
-        balance = data.get("balance", data.get("amount", 0))
-        return f"Wallet {wallet_id}: {balance} RTC (${float(balance) * 0.10:.2f} USD reference)"
+        for key in ("amount_rtc", "balance", "amount"):
+            if key in data:
+                raw = data[key]
+                break
+        else:
+            raw = 0
+        if isinstance(raw, bool):
+            return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
+        try:
+            balance = float(raw)
+        except (TypeError, ValueError):
+            return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
+        if not math.isfinite(balance):
+            return f"Wallet {wallet_id}: balance unavailable (node returned {raw!r})"
+        return f"Wallet {wallet_id}: {balance:g} RTC (${balance * 0.10:.2f} USD reference)"
 
 
 class ListBountiesInput(BaseModel):
@@ -124,10 +147,11 @@ class RustChainGetNodeHealth(BaseTool):
         data = _get(f"{RUSTCHAIN_NODE}/health")
         if "error" in data:
             return f"Error checking health: {data['error']}"
+        uptime_s = _safe_nonneg_int(data.get("uptime_s"), 0)
         return (
             f"RustChain Node: {'Healthy' if data.get('ok') else 'Unhealthy'}\n"
             f"Version: {data.get('version', 'unknown')}\n"
-            f"Uptime: {data.get('uptime_s', 0) // 3600}h {(data.get('uptime_s', 0) % 3600) // 60}m\n"
+            f"Uptime: {uptime_s // 3600}h {(uptime_s % 3600) // 60}m\n"
             f"Database: {'Read/Write' if data.get('db_rw') else 'Read-only'}"
         )
 
@@ -191,17 +215,19 @@ class RustChainBoTTubeSearch(BaseTool):
     args_schema: Type[BaseModel] = BoTTubeSearchInput
 
     def _run(self, query: str) -> str:
-        data = _get(f"{BOTTUBE_URL}/api/v1/videos/search", params={"q": query})
+        data = _get(f"{BOTTUBE_URL}/api/search", params={"q": query})
         if "error" in data:
             return f"Error searching videos: {data['error']}"
-        videos = data if isinstance(data, list) else data.get("videos", [])
+        videos = data if isinstance(data, list) else (data.get("videos") or [])
         if not videos:
             return f"No videos found for '{query}'"
         lines = [f"Found {len(videos)} videos for '{query}':"]
         for v in videos[:5]:
-            title = v.get("title", "Untitled")[:60]
+            if not isinstance(v, dict):
+                continue
+            title = str(v.get("title") or "Untitled")[:60]
             creator = v.get("creator", v.get("agent_name", "unknown"))
-            views = v.get("views", 0)
+            views = _safe_nonneg_int(v.get("views"), 0)
             lines.append(f"  [{title}] by {creator} ({views} views)")
         return "\n".join(lines)
 
@@ -227,13 +253,16 @@ class RustChainBoTTubeStats(BaseTool):
             f"  Comments: {data.get('comments', 0):,}",
             f"  Likes: {data.get('likes', 0):,}",
         ]
-        top = data.get("top_agents", [])[:5]
+        top = [a for a in (data.get("top_agents") or []) if isinstance(a, dict)][:5]
         if top:
             lines.append("  Top creators:")
             for a in top:
+                agent_name = a.get("agent_name", a.get("username", "unknown"))
+                video_count = _safe_nonneg_int(a.get("video_count"), 0)
+                total_views = _safe_nonneg_int(a.get("total_views"), 0)
                 lines.append(
-                    f"    {a['agent_name']}: {a['video_count']} videos, "
-                    f"{a['total_views']:,} views"
+                    f"    {agent_name}: {video_count} videos, "
+                    f"{total_views:,} views"
                 )
         return "\n".join(lines)
 
@@ -259,16 +288,21 @@ class RustChainBeaconDiscover(BaseTool):
         data = _get(f"{BEACON_URL}/api/agents")
         if "error" in data:
             return f"Error discovering agents: {data['error']}"
-        agents = data if isinstance(data, list) else []
+        raw_agents = data if isinstance(data, list) else (data.get("agents") or []) if isinstance(data, dict) else []
+        agents = [a for a in raw_agents if isinstance(a, dict)]
         if capability:
-            agents = [a for a in agents if capability.lower() in
-                      [c.lower() for c in a.get("capabilities", [])]]
+            cap_lower = capability.lower()
+            agents = [
+                a for a in agents
+                if cap_lower in [c.lower() for c in (a.get("capabilities") or []) if isinstance(c, str)]
+            ]
         lines = [f"Beacon agents: {len(agents)}"]
         for a in agents[:15]:
-            name = a.get("name", a.get("agent_id", "?"))
+            agent_id = a.get("agent_id", "?")
+            name = a.get("name", agent_id)
             status = a.get("status", "unknown")
             relay = " (relay)" if a.get("relay") else ""
-            lines.append(f"  {a['agent_id']}: {name} [{status}]{relay}")
+            lines.append(f"  {agent_id}: {name} [{status}]{relay}")
         if len(agents) > 15:
             lines.append(f"  ... and {len(agents) - 15} more")
         return "\n".join(lines)
