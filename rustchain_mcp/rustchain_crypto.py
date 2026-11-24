@@ -842,71 +842,165 @@ def export_keystore(password: str = "") -> dict[str, Any]:
     }
 
 
+def _try_decrypt_data(encrypted_data: str, passwords: list[str]) -> Optional[str]:
+    """Try decrypting ``encrypted_data`` with each non-empty password in order."""
+    if not isinstance(encrypted_data, str) or not encrypted_data:
+        return None
+    for pwd in passwords:
+        if not pwd:
+            continue
+        try:
+            return _decrypt_data(encrypted_data, pwd)
+        except Exception:
+            continue
+    return None
+
+
 def import_wallet(
     source: str,
     wallet_id: str = "",
     password: str = "",
+    source_password: str = "",
 ) -> dict[str, Any]:
     """
-    Import a wallet from seed phrase or keystore JSON.
+    Import a wallet from seed phrase, keystore JSON, or encrypted export_keystore backup.
 
     Args:
-        source: Either a BIP39 seed phrase (space-separated words) or
-                encrypted keystore JSON string
+        source: Either a BIP39 seed phrase (space-separated words), keystore JSON,
+                or encrypted_keystore backup string from export_keystore()
         wallet_id: Desired wallet ID (optional, auto-generated if not provided)
         password: Password to encrypt the imported keystore (required)
+        source_password: Password used to encrypt the exported backup / source keys
+                         when different from ``password``
 
     Returns:
-        Imported wallet info (wallet_id, address), or {"error": ...}.
+        Imported wallet info (wallets_imported, ...), or {"error": ...}.
         Existing wallets are never overwritten.
     """
     if not password:
         return {"error": PASSWORD_REQUIRED_MESSAGE}
 
-    # First try to parse as JSON (encrypted keystore export)
+    # First try to parse as JSON, or decrypt an export_keystore backup string.
+    imported_data = None
+    outer_pw_used = ""
     try:
         imported_data = json.loads(source)
-        
+    except json.JSONDecodeError:
+        words = source.strip().split()
+        looks_like_seed = 12 <= len(words) <= 24 and all(w in BIP39_WORDLIST for w in words)
+        if not looks_like_seed and source.strip():
+            outer_candidates = [p for p in dict.fromkeys((source_password, password)) if p]
+            for pwd in outer_candidates:
+                try:
+                    decrypted_outer = _decrypt_data(source.strip(), pwd)
+                    parsed = json.loads(decrypted_outer)
+                    imported_data = parsed
+                    outer_pw_used = pwd
+                    break
+                except Exception:
+                    continue
+            if imported_data is None and source_password:
+                return {"error": "Could not decrypt keystore backup with provided source_password"}
+
+    if imported_data is not None:
+        if not isinstance(imported_data, dict):
+            return {"error": "Invalid keystore JSON: expected a JSON object"}
+
         # Handle single wallet or wallet array
-        wallets_to_import = imported_data.get("wallets", [imported_data])
+        if "wallets" in imported_data:
+            wallets_to_import = imported_data["wallets"]
+            if not isinstance(wallets_to_import, list):
+                return {"error": "Invalid keystore JSON: 'wallets' must be a list"}
+        else:
+            wallets_to_import = [imported_data]
+
         if wallet_id and len(wallets_to_import) > 1:
             return {
                 "error": "wallet_id can only be given when importing a single "
                 "wallet; batch imports keep each wallet's own wallet_id."
             }
-        
+
         imported_count = 0
         skipped_existing = []
         skipped_invalid = []
         failed = []
+        warnings = []
         for wallet_data in wallets_to_import:
-            target_id = wallet_id or wallet_data.get("wallet_id", f"imported-{__import__('time').time()}")
-            
+            if not isinstance(wallet_data, dict):
+                skipped_invalid.append("<invalid-entry>")
+                continue
+
+            orig_id = wallet_data.get("wallet_id", "")
+            target_id = wallet_id or orig_id or f"imported-{__import__('time').time()}"
+            address = wallet_data.get("address")
+            if not isinstance(address, str) or not address.strip():
+                failed.append({"wallet_id": str(target_id), "error": "Missing or invalid address"})
+                continue
+
             keystore_path = ensure_keystore_exists()
             wallet_file = _wallet_file(keystore_path, target_id)
             if wallet_file is None:
                 skipped_invalid.append(str(target_id))
                 continue
-            
-            # Re-encrypt with new password
+
+            pw_candidates = [p for p in dict.fromkeys((source_password, outer_pw_used, password)) if p]
+            if (
+                isinstance(orig_id, str)
+                and orig_id
+                and not wallet_data.get("password_protected")
+                and orig_id not in pw_candidates
+            ):
+                pw_candidates.append(orig_id)
+
+            raw_pk = wallet_data.get("private_key")
+            if isinstance(raw_pk, str) and raw_pk:
+                plain_pk = raw_pk
+            else:
+                enc_pk = wallet_data.get("encrypted_private_key", "")
+                if enc_pk:
+                    decrypted_pk = _try_decrypt_data(enc_pk, pw_candidates)
+                    if decrypted_pk is not None:
+                        plain_pk = decrypted_pk
+                    elif source_password:
+                        failed.append({
+                            "wallet_id": str(target_id),
+                            "error": "Failed to decrypt encrypted_private_key with source_password",
+                        })
+                        continue
+                    else:
+                        # Legacy callers / dummy test payloads without source_password
+                        plain_pk = enc_pk
+                        warnings.append(
+                            f"Wallet '{target_id}' key could not be decrypted with the new password; "
+                            "pass source_password to re-key without double encryption"
+                        )
+                else:
+                    plain_pk = ""
+
+            raw_mn = wallet_data.get("mnemonic")
+            if isinstance(raw_mn, str):
+                plain_mnemonic = raw_mn
+            else:
+                enc_mn = wallet_data.get("encrypted_mnemonic", "")
+                if enc_mn:
+                    decrypted_mn = _try_decrypt_data(enc_mn, pw_candidates)
+                    plain_mnemonic = decrypted_mn if decrypted_mn is not None else enc_mn
+                else:
+                    plain_mnemonic = ""
+
+            # Encrypt plaintext key material under the new password
             keystore_data = {
                 "version": 1,
                 "wallet_id": target_id,
-                "address": wallet_data["address"],
+                "address": address,
                 "public_key": wallet_data.get("public_key", ""),
-                "encrypted_private_key": _encrypt_data(
-                    wallet_data.get("encrypted_private_key", ""),
-                    password,
-                ),
-                "encrypted_mnemonic": _encrypt_data(
-                    wallet_data.get("encrypted_mnemonic", ""),
-                    password,
-                ),
+                "encrypted_private_key": _encrypt_data(plain_pk, password),
+                "encrypted_mnemonic": _encrypt_data(plain_mnemonic, password),
                 "password_protected": True,
                 "created_at": int(__import__('time').time()),
                 "imported_from": "keystore",
             }
-            
+
             try:
                 _write_new_keystore(wallet_file, keystore_data)
             except ValueError:
@@ -916,7 +1010,7 @@ def import_wallet(
                 failed.append({"wallet_id": str(target_id), "error": e.strerror or str(e)})
                 continue
             imported_count += 1
-        
+
         result = {
             "wallets_imported": imported_count,
             "message": f"Successfully imported {imported_count} wallet(s)",
@@ -935,9 +1029,9 @@ def import_wallet(
         if failed:
             result["failed"] = failed
             result["message"] += f"; {len(failed)} failed to write"
+        if warnings:
+            result["warnings"] = warnings
         return result
-    except json.JSONDecodeError:
-        pass
     
     # If JSON parsing failed, try seed phrase import
     words = source.strip().split()
