@@ -40,6 +40,18 @@ class TestRustChainCheckBalance:
         result = tool._run(wallet_id="test-wallet")
         assert "Error" in result
 
+    @patch("rustchain_crewai._get")
+    def test_check_balance_uses_live_wallet_balance_and_guards_null(self, mock_get):
+        mock_get.return_value = {"amount_rtc": 42.5, "miner_id": "dual-g4-125"}
+        tool = RustChainCheckBalance()
+        result = tool._run(wallet_id="dual-g4-125")
+        assert mock_get.call_args[0][0].endswith("/wallet/balance")
+        assert "42.5" in result
+
+        mock_get.return_value = {"amount_rtc": None}
+        null_result = tool._run(wallet_id="missing")
+        assert "balance unavailable" in null_result
+
 
 class TestRustChainListBounties:
     """Tests for RustChainListBounties tool."""
@@ -144,6 +156,14 @@ class TestRustChainBoTTubeSearch:
         tool = RustChainBoTTubeSearch()
         result = tool._run(query="nonexistent")
         assert "No videos found" in result
+
+    @patch("rustchain_crewai._get")
+    def test_search_uses_live_api_search_path(self, mock_get):
+        mock_get.return_value = {"videos": [{"title": "Live Hit", "views": 1}]}
+        tool = RustChainBoTTubeSearch()
+        result = tool._run(query="live")
+        assert mock_get.call_args[0][0].endswith("/api/search")
+        assert "Live Hit" in result
 
 
 class TestRustChainBoTTubeStats:
