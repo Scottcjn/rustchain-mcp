@@ -25,6 +25,7 @@ License: MIT
 import atexit
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -168,6 +169,54 @@ def _path_segment(value: str, field: str) -> str:
 
 def _invalid_argument(exc: ValueError) -> dict:
     return {"ok": False, "error": str(exc), "code": "INVALID_ARGUMENT"}
+
+
+def _validate_transfer_inputs(
+    to_address: object,
+    amount_rtc: object,
+    from_address: object = None,
+    nonce: object = None,
+) -> tuple[str, float, str | None, int | None, dict | None]:
+    """Validate signed-transfer arguments before signing or sending any request."""
+    def _err(msg: str) -> dict:
+        return {
+            "success": False,
+            "ok": False,
+            "code": "INVALID_ARGUMENT",
+            "error": msg,
+            "outcome_unknown": False,
+        }
+
+    if from_address is not None:
+        if not isinstance(from_address, str) or not from_address.strip():
+            return "", 0.0, None, None, _err("from_address must be a non-empty string")
+        clean_from: str | None = from_address.strip()
+    else:
+        clean_from = None
+
+    if not isinstance(to_address, str) or not to_address.strip():
+        return "", 0.0, clean_from, None, _err("to_address must be a non-empty string")
+    clean_to = to_address.strip()
+
+    if isinstance(amount_rtc, bool):
+        return "", 0.0, clean_from, None, _err("amount_rtc must be a positive finite number")
+    try:
+        amount_val = float(amount_rtc)
+    except (TypeError, ValueError):
+        return "", 0.0, clean_from, None, _err("amount_rtc must be a positive finite number")
+    if not math.isfinite(amount_val) or amount_val <= 0:
+        return "", 0.0, clean_from, None, _err("amount_rtc must be a positive finite number")
+
+    clean_nonce: int | None = None
+    if nonce is not None:
+        if isinstance(nonce, bool):
+            return "", 0.0, clean_from, None, _err("nonce must be an integer")
+        try:
+            clean_nonce = int(nonce)
+        except (TypeError, ValueError):
+            return "", 0.0, clean_from, None, _err("nonce must be an integer")
+
+    return clean_to, amount_val, clean_from, clean_nonce, None
 
 
 def _get_rustchain_balance(miner_id: str, client: httpx.Client | None = None) -> dict:
@@ -543,6 +592,10 @@ def wallet_transfer_signed(
     reason in "error"; outcome_unknown=True means check wallet_history
     before retrying.
     """
+    clean_to, amount_val, _, _, err = _validate_transfer_inputs(to_address, amount_rtc)
+    if err is not None:
+        return err
+
     # Load wallet from keystore
     wallet = rustchain_crypto.load_wallet(from_wallet_id, password)
     if wallet is None:
@@ -572,8 +625,8 @@ def wallet_transfer_signed(
     nonce = int(time.time() * 1000)
     tx_data = {
         "from": wallet["address"],
-        "to": to_address,
-        "amount": float(amount_rtc),
+        "to": clean_to,
+        "amount": amount_val,
         "memo": memo,
         "nonce": str(nonce),
     }
@@ -583,8 +636,8 @@ def wallet_transfer_signed(
     # Submit signed transfer to network — passing the SAME nonce that was signed
     result = rustchain_transfer_signed(
         from_address=wallet["address"],
-        to_address=to_address,
-        amount_rtc=amount_rtc,
+        to_address=clean_to,
+        amount_rtc=amount_val,
         signature=signature,
         public_key=wallet["public_key"],
         memo=memo,
@@ -829,8 +882,13 @@ def rustchain_transfer_signed(
     Transfers require valid Ed25519 signatures.
     """
     import time
-    if nonce is None:
-        nonce = int(time.time() * 1000)
+    clean_to, amount_val, clean_from, clean_nonce, err = _validate_transfer_inputs(
+        to_address, amount_rtc, from_address=from_address, nonce=nonce
+    )
+    if err is not None:
+        return err
+    if clean_nonce is None:
+        clean_nonce = int(time.time() * 1000)
     # Send exactly the fields the node's /wallet/transfer/signed handler reads
     # (from_address, to_address, amount_rtc, nonce, signature, public_key, memo).
     # `amount_rtc` is float()-normalized so it serializes identically to the
@@ -840,11 +898,11 @@ def rustchain_transfer_signed(
     # was redundant — the node only reads the legacy names — and the extra `fee`
     # fields were dead weight.
     payload = {
-        "from_address": from_address,
-        "to_address": to_address,
-        "amount_rtc": float(amount_rtc),
+        "from_address": clean_from,
+        "to_address": clean_to,
+        "amount_rtc": amount_val,
         "memo": memo,
-        "nonce": nonce,
+        "nonce": clean_nonce,
         "signature": signature,
         "public_key": public_key,
     }
@@ -1140,9 +1198,16 @@ def bottube_comment(video_id: str, content: str, api_key: str = "") -> dict:
         video_seg = _path_segment(video_id, "video_id")
     except ValueError as exc:
         return _invalid_argument(exc)
-    headers = {}
-    if api_key:
-        headers["X-API-Key"] = api_key
+    if not isinstance(content, str) or not content.strip():
+        return _invalid_argument(ValueError("content must be a non-empty string"))
+    key = (api_key or os.environ.get("BOTTUBE_API_KEY", "")).strip()
+    if not key:
+        return {
+            "ok": False,
+            "code": "API_KEY_REQUIRED",
+            "error": "BoTTube API key required: pass api_key or set BOTTUBE_API_KEY. Get one at bottube.ai",
+        }
+    headers = {"X-API-Key": key}
 
     r = get_client().post(
         f"{BOTTUBE_URL}/api/videos/{video_seg}/comment",
@@ -1168,9 +1233,16 @@ def bottube_vote(video_id: str, direction: str = "up", api_key: str = "") -> dic
         video_seg = _path_segment(video_id, "video_id")
     except ValueError as exc:
         return _invalid_argument(exc)
-    headers = {}
-    if api_key:
-        headers["X-API-Key"] = api_key
+    if direction not in ("up", "down"):
+        return _invalid_argument(ValueError("direction must be 'up' or 'down'"))
+    key = (api_key or os.environ.get("BOTTUBE_API_KEY", "")).strip()
+    if not key:
+        return {
+            "ok": False,
+            "code": "API_KEY_REQUIRED",
+            "error": "BoTTube API key required: pass api_key or set BOTTUBE_API_KEY. Get one at bottube.ai",
+        }
+    headers = {"X-API-Key": key}
 
     r = get_client().post(
         f"{BOTTUBE_URL}/api/videos/{video_seg}/vote",
@@ -1210,15 +1282,27 @@ def beacon_discover(
     # Get combined native + relay agents
     r = get_client().get(f"{BEACON_URL}/api/agents")
     r.raise_for_status()
-    agents = r.json()
+    raw_agents = r.json()
+    agent_list = (
+        raw_agents if isinstance(raw_agents, list)
+        else (raw_agents.get("agents") or []) if isinstance(raw_agents, dict)
+        else []
+    )
+    agents = [a for a in agent_list if isinstance(a, dict)]
 
     # Apply filters
     if provider:
-        agents = [a for a in agents if a.get("provider", "") == provider
-                  or a.get("provider_name", "").lower().startswith(provider.lower())]
+        agents = [
+            a for a in agents
+            if a.get("provider", "") == provider
+            or str(a.get("provider_name") or "").lower().startswith(provider.lower())
+        ]
     if capability:
-        agents = [a for a in agents if capability.lower() in
-                  [c.lower() for c in a.get("capabilities", [])]]
+        cap_lower = capability.lower()
+        agents = [
+            a for a in agents
+            if cap_lower in [c.lower() for c in (a.get("capabilities") or []) if isinstance(c, str)]
+        ]
 
     return {
         "total": len(agents),
@@ -1324,8 +1408,14 @@ def beacon_agent_status(agent_id: str) -> dict:
     # Fall back to combined agents list for native agents
     r2 = get_client().get(f"{BEACON_URL}/api/agents")
     r2.raise_for_status()
-    for agent in r2.json():
-        if agent.get("agent_id") == agent_id:
+    raw_agents = r2.json()
+    agent_list = (
+        raw_agents if isinstance(raw_agents, list)
+        else (raw_agents.get("agents") or []) if isinstance(raw_agents, dict)
+        else []
+    )
+    for agent in agent_list:
+        if isinstance(agent, dict) and agent.get("agent_id") == agent_id:
             return agent
 
     return {"error": f"Agent '{agent_id}' not found", "hint": "Use beacon_discover to list all agents"}
@@ -1405,7 +1495,13 @@ def beacon_contracts(agent_id: str = "") -> dict:
     """
     r = get_client().get(f"{BEACON_URL}/api/contracts")
     r.raise_for_status()
-    contracts = r.json()
+    raw_contracts = r.json()
+    contract_list = (
+        raw_contracts if isinstance(raw_contracts, list)
+        else (raw_contracts.get("contracts") or []) if isinstance(raw_contracts, dict)
+        else []
+    )
+    contracts = [c for c in contract_list if isinstance(c, dict)]
 
     if agent_id:
         contracts = [c for c in contracts
