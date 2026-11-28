@@ -21,6 +21,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import pathlib
+import re
 import socket
 import tempfile
 from collections.abc import Callable
@@ -40,6 +41,10 @@ MAX_TAG_LENGTH = 40
 
 MAX_REDIRECTS = 5
 _CHUNK = 64 * 1024
+_MAX_FILENAME_LENGTH = 128
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
 
 _CONTENT_TYPE_EXT = {
     "video/mp4": ".mp4",
@@ -103,6 +108,9 @@ def _fmt_mb(n: int) -> str:
 
 def validate_metadata(title: str, description: str, tags: str, category: str) -> dict[str, str]:
     """Return the form fields to send, or raise ``UploadError``."""
+    for raw in (title, description, tags, category):
+        if isinstance(raw, str) and "\x00" in raw:
+            raise UploadError("metadata fields must not contain NUL bytes")
     title = (title or "").strip()
     if not title:
         raise UploadError("title is required")
@@ -128,27 +136,78 @@ def validate_metadata(title: str, description: str, tags: str, category: str) ->
 
 def resolve_local_file(video_path: str, limit: int) -> pathlib.Path:
     """Validate a local video path and return it resolved."""
-    path = pathlib.Path(video_path).expanduser()
-    if not path.exists():
-        raise UploadError(f"video_path does not exist: {video_path}")
-    if not path.is_file():
-        raise UploadError(f"video_path is not a regular file: {video_path}")
-    ext = path.suffix.lower()
-    if ext not in ALLOWED_VIDEO_EXT:
-        raise UploadError(
-            f"unsupported video extension {ext or '(none)'!r}; allowed: {', '.join(ALLOWED_VIDEO_EXT)}"
-        )
-    size = path.stat().st_size
-    if size == 0:
-        raise UploadError(f"video_path is empty: {video_path}")
-    if size > limit:
-        raise UploadError(f"video is {_fmt_mb(size)}; the upload limit is {_fmt_mb(limit)}")
-    return path.resolve()
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise UploadError("upload limit must be positive")
+    if not isinstance(video_path, str) or not video_path or "\x00" in video_path:
+        raise UploadError("video_path is invalid")
+    try:
+        path = pathlib.Path(video_path).expanduser()
+        if not path.exists():
+            raise UploadError(f"video_path does not exist: {video_path}")
+        if not path.is_file():
+            raise UploadError(f"video_path is not a regular file: {video_path}")
+        ext = path.suffix.lower()
+        if ext not in ALLOWED_VIDEO_EXT:
+            raise UploadError(
+                f"unsupported video extension {ext or '(none)'!r}; allowed: {', '.join(ALLOWED_VIDEO_EXT)}"
+            )
+        size = path.stat().st_size
+        if size == 0:
+            raise UploadError(f"video_path is empty: {video_path}")
+        if size > limit:
+            raise UploadError(f"video is {_fmt_mb(size)}; the upload limit is {_fmt_mb(limit)}")
+        return path.resolve()
+    except OSError as exc:
+        raise UploadError(f"could not inspect video_path {video_path!r}: {exc}") from exc
 
 
 def _default_resolver(host: str) -> list[str]:
     infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     return [info[4][0] for info in infos]
+
+
+def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True only for globally routable unicast IPv4/IPv6 addresses."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return _is_public_ip(ip.ipv4_mapped)
+        if ip.sixtofour is not None and not _is_public_ip(ip.sixtofour):
+            return False
+        if ip.teredo is not None:
+            server_ip, client_ip = ip.teredo
+            if not (_is_public_ip(server_ip) and _is_public_ip(client_ip)):
+                return False
+        if ip in _NAT64_WELL_KNOWN or ip in _NAT64_LOCAL:
+            return False
+    return (
+        ip.is_global
+        and not ip.is_multicast
+        and not ip.is_private
+        and not ip.is_loopback
+        and not ip.is_link_local
+        and not ip.is_reserved
+        and not ip.is_unspecified
+    )
+
+
+def _sanitize_upload_filename(raw_name: str, ext: str) -> str:
+    """Return a safe multipart upload filename ending with ``ext``."""
+    if not raw_name or any(ord(ch) < 32 or ord(ch) == 127 for ch in raw_name):
+        return f"video{ext}"
+    cleaned = _UNSAFE_FILENAME_RE.sub("_", raw_name).strip("._")
+    if not cleaned or not cleaned.lower().endswith(ext):
+        return f"video{ext}"
+    stem = cleaned[: -len(ext)].strip("._")
+    if not stem:
+        return f"video{ext}"
+    max_stem = max(1, _MAX_FILENAME_LENGTH - len(ext))
+    return f"{stem[:max_stem]}{ext}"
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    if secret and secret in text:
+        return text.replace(secret, "[REDACTED]")
+    return text
 
 
 def _check_public_url(url: str, resolver: Callable[[str], list[str]]) -> None:
@@ -157,9 +216,17 @@ def _check_public_url(url: str, resolver: Callable[[str], list[str]]) -> None:
     This stops the tool from being used to pull files off loopback, the LAN,
     or cloud metadata endpoints. Use ``video_path`` for local files.
     """
+    if not isinstance(url, str) or any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        raise UploadError("video_url contains invalid control characters")
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise UploadError("video_url must be an http:// or https:// URL")
+    if parts.username is not None or parts.password is not None:
+        raise UploadError("video_url must not contain credentials")
+    try:
+        _ = parts.port
+    except ValueError as exc:
+        raise UploadError(f"video_url has an invalid port: {exc}") from exc
     host = parts.hostname
     if not host:
         raise UploadError("video_url has no host")
@@ -170,8 +237,18 @@ def _check_public_url(url: str, resolver: Callable[[str], list[str]]) -> None:
     if not addresses:
         raise UploadError(f"could not resolve video_url host {host!r}")
     for addr in addresses:
-        ip = ipaddress.ip_address(addr.split("%", 1)[0])
-        if not ip.is_global:
+        if not isinstance(addr, str) or "%" in addr:
+            raise UploadError(
+                f"video_url host {host!r} resolves to non-public address {addr!r}; "
+                "download a local copy and pass video_path instead"
+            )
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError as exc:
+            raise UploadError(
+                f"video_url host {host!r} resolved to invalid address {addr!r}"
+            ) from exc
+        if not _is_public_ip(ip):
             raise UploadError(
                 f"video_url host {host!r} resolves to non-public address {ip}; "
                 "download a local copy and pass video_path instead"
@@ -203,6 +280,8 @@ def download_to_temp(
     public-address rule. Returns ``(temp_path, upload_filename)``; the
     caller must delete ``temp_path``.
     """
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise UploadError("upload limit must be positive")
     resolver = resolver or _default_resolver
     current = url
     for _ in range(MAX_REDIRECTS + 1):
@@ -219,8 +298,13 @@ def download_to_temp(
                     f"downloading video_url failed with HTTP {resp.status_code}",
                     status_code=resp.status_code,
                 )
-            declared = resp.headers.get("content-length")
-            if declared and declared.isdigit() and int(declared) > limit:
+            if not 200 <= resp.status_code < 300:
+                raise UploadError(
+                    f"downloading video_url returned unexpected HTTP {resp.status_code}",
+                    status_code=resp.status_code,
+                )
+            declared = (resp.headers.get("content-length") or "").strip()
+            if declared and declared.isascii() and declared.isdigit() and int(declared) > limit:
                 raise UploadError(
                     f"video_url is {_fmt_mb(int(declared))}; the upload limit is {_fmt_mb(limit)}"
                 )
@@ -228,8 +312,10 @@ def download_to_temp(
             fd, tmp_name = tempfile.mkstemp(prefix="bottube-upload-", suffix=ext)
             tmp_path = pathlib.Path(tmp_name)
             total = 0
+            out_fh = None
             try:
-                with os.fdopen(fd, "wb") as out:
+                out_fh = os.fdopen(fd, "wb")
+                with out_fh as out:
                     for chunk in resp.iter_bytes(_CHUNK):
                         total += len(chunk)
                         if total > limit:
@@ -240,16 +326,17 @@ def download_to_temp(
                 if total == 0:
                     raise UploadError("video_url returned an empty body")
             except BaseException:
+                if out_fh is None:
+                    os.close(fd)
                 tmp_path.unlink(missing_ok=True)
                 raise
-            name = pathlib.PurePosixPath(urlsplit(current).path).name
-            if not name.lower().endswith(ext):
-                name = f"video{ext}"
+            raw_name = pathlib.PurePosixPath(urlsplit(current).path).name
+            name = _sanitize_upload_filename(raw_name, ext)
             return tmp_path, name
     raise UploadError(f"video_url redirected more than {MAX_REDIRECTS} times")
 
 
-def _error_from_response(resp: httpx.Response) -> dict[str, Any]:
+def _error_from_response(resp: httpx.Response, api_key: str = "") -> dict[str, Any]:
     detail: Any = None
     try:
         body = resp.json()
@@ -257,13 +344,15 @@ def _error_from_response(resp: httpx.Response) -> dict[str, Any]:
         body = None
     if isinstance(body, dict):
         detail = body.get("error") or body.get("message")
+        detail_str = _redact_secret(str(detail), api_key) if detail else "no error message"
         result: dict[str, Any] = {"ok": False, "status_code": resp.status_code}
-        result["error"] = f"BoTTube rejected the upload (HTTP {resp.status_code}): {detail or 'no error message'}"
+        result["error"] = f"BoTTube rejected the upload (HTTP {resp.status_code}): {detail_str}"
         for key in ("code", "coach_note", "max_duration", "max_file_kb", "category"):
             if key in body:
-                result[key] = body[key]
+                val = body[key]
+                result[key] = _redact_secret(val, api_key) if isinstance(val, str) else val
         return result
-    text = (resp.text or "")[:200]
+    text = _redact_secret((resp.text or "")[:200], api_key)
     return {
         "ok": False,
         "status_code": resp.status_code,
@@ -300,10 +389,11 @@ def post_multipart(
             ),
         }
     except httpx.HTTPError as exc:
-        return {"ok": False, "error": f"BoTTube upload failed: {type(exc).__name__}: {exc}"}
+        safe_exc = _redact_secret(str(exc), api_key)
+        return {"ok": False, "error": f"BoTTube upload failed: {type(exc).__name__}: {safe_exc}"}
 
     if resp.status_code >= 400:
-        return _error_from_response(resp)
+        return _error_from_response(resp, api_key=api_key)
     try:
         body = resp.json()
     except ValueError:
